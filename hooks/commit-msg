@@ -7,11 +7,15 @@
 
 msg="$1"
 [ -f "$msg" ] || { echo "commit-msg: メッセージのファイルが無い: $msg" >&2; exit 1; }
+# 種類の一覧と字数の上限は repo ごとの commit-hooks.conf
+. "$(dirname "$0")/conf.sh"
+types=$(conf types) || exit 1
+max=$(conf subject_max) || exit 1
 
 # 文字数はロケールに頼らず数える。UTF-8 の続きのバイト（0x80〜0xBF）を除いた数が字数になる
-LC_ALL=C awk '
+LC_ALL=C awk -v types="$types" -v max="$max" '
 function ulen(s) { gsub(/[\200-\277]/, "", s); return length(s) }
-BEGIN { n = 0; types = "feat|fix|docs|refactor|chore|test" }
+BEGIN { n = 0; max += 0 }
 # git が消す行: コメント（#）と、-v のときのはさみの行より後
 /^# -+ >8 -+$/ { cut = 1 }
 cut { next }
@@ -28,9 +32,9 @@ END {
     if (subj !~ ("^(" types ")(\\([^()]+\\))?: [^ ]")) {
         fail = fail ",M1"; why = why "\n  M1 件名が「種類(範囲): 説明」の形でない（種類は " types "・範囲は省ける）: " subj
     } else {
-        # M2: 説明（": " より後）が 40 字以内
+        # M2: 説明（": " より後）が max 字以内
         d = subj; sub(/^[^:]*: /, "", d)
-        if (ulen(d) > 40) { fail = fail ",M2"; why = why "\n  M2 説明が " ulen(d) " 字（40 字以内。細目・指示の引用・日付は本文へ）" }
+        if (ulen(d) > max) { fail = fail ",M2"; why = why "\n  M2 説明が " ulen(d) " 字（" max " 字以内。細目・指示の引用・日付は本文へ）" }
     }
     # M3: 件名の次は空行
     if (n >= 2 && line[2] !~ /^[ \t]*$/) { fail = fail ",M3"; why = why "\n  M3 件名の次の行が空行でない" }

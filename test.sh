@@ -1,5 +1,5 @@
 #!/bin/sh
-# test.sh — install.sh・commit-msg・pre-commit の試験。一時フォルダに使い捨ての repo を作り、
+# test.sh — install.sh・設定の 3 段・commit-msg・pre-commit の試験。一時フォルダに使い捨ての repo を作り、
 # このフォルダを Tools/commit-hooks/ に写して install.sh で入れ、本物の git commit で回す。
 #   sh test.sh
 # 場合ごとに CASE <名> ok|NG、最後に HOOKS-TEST PASS|FAIL（外れた場合の名前つき）。
@@ -7,32 +7,41 @@
 src=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# 写す物（.git と試験の外のもの以外）
+copyto() { mkdir -p "$1"; cp -r "$src/hooks" "$src/profiles" "$src/install.sh" "$src/commit-hooks.conf.example" "$1/"; }
 repo="$tmp/repo"
 git init -q "$repo" || exit 1
 cd "$repo" || exit 1
 git config user.name test; git config user.email test@example.invalid; git config core.autocrlf false
-mkdir -p Tools/commit-hooks/hooks
-cp "$src/install.sh" Tools/commit-hooks/
-cp "$src/hooks/commit-msg" "$src/hooks/pre-commit" "$src/hooks/relay.sh" Tools/commit-hooks/hooks/
+copyto Tools/commit-hooks
 printf 'Saved/\n*.bin\n' > .gitignore
 
 failed=""
 n=0
-# check <名> <条件の終了コード>
+# check <名> <条件の終了コード> <外れたときに出すもの>
 check() { n=$((n + 1)); if [ "$2" -eq 0 ]; then echo "CASE $1 ok"; else echo "CASE $1 NG"; printf '%s\n' "$3" | sed 's/^/    /'; failed="$failed,$1"; fi; }
+# setconf <中身> — repo の commit-hooks.conf を書き換える（コミットはしない。フックは作業ツリーのファイルを読む）
+setconf() { printf '%s\n' "$@" > commit-hooks.conf; }
 
 # --- install.sh
-out=$(sh Tools/commit-hooks/install.sh 2>&1)
-printf '%s' "$out" | grep -q 'commit-msg=installed pre-commit=installed .*verdict=PASS'; check 'install 1回目' $? "$out"
-out=$(sh Tools/commit-hooks/install.sh 2>&1)
-printf '%s' "$out" | grep -q 'commit-msg=unchanged pre-commit=unchanged .*verdict=PASS'; check 'install 2回目' $? "$out"
+out=$(sh Tools/commit-hooks/install.sh 2>&1); rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'verdict=FAIL'; check 'install profileなしは止める' $? "$out"
+out=$(sh Tools/commit-hooks/install.sh node 2>&1)
+printf '%s' "$out" | grep -q 'conf=created commit-msg=installed pre-commit=installed .*verdict=PASS'; check 'install 1回目' $? "$out"
+grep -q '^profile=node$' commit-hooks.conf; check 'confにprofileが入る' $? "$(cat commit-hooks.conf)"
+echo '# 手で足した行' >> commit-hooks.conf
+out=$(sh Tools/commit-hooks/install.sh node 2>&1)
+printf '%s' "$out" | grep -q 'conf=exists commit-msg=unchanged pre-commit=unchanged .*verdict=PASS'; check 'install 2回目' $? "$out"
+grep -q '手で足した行' commit-hooks.conf; check 'confを上書きしない' $? "$(cat commit-hooks.conf)"
+out=$(sh Tools/commit-hooks/install.sh unity 2>&1); rc=$?
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'conf=mismatch'; check '違うprofileは止める' $? "$out"
 grep -q 'Tools/commit-hooks/hooks/commit-msg' .git/hooks/commit-msg; check '中継が置き場を指す' $? "$(cat .git/hooks/commit-msg)"
-mkdir -p "$tmp/other"; git init -q "$tmp/other"; printf '#!/bin/sh\nexit 0\n' > "$tmp/other/.git/hooks/pre-commit"
-mkdir -p "$tmp/other/ch/hooks"; cp Tools/commit-hooks/install.sh "$tmp/other/ch/"; cp Tools/commit-hooks/hooks/* "$tmp/other/ch/hooks/"
-out=$(sh "$tmp/other/ch/install.sh" 2>&1); rc=$?
+git init -q "$tmp/other"; printf '#!/bin/sh\nexit 0\n' > "$tmp/other/.git/hooks/pre-commit"
+copyto "$tmp/other/ch"
+out=$(sh "$tmp/other/ch/install.sh" node 2>&1); rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'pre-commit=conflict .*verdict=FAIL'; check '既存のフックを上書きしない' $? "$out"
 git -C "$tmp/other" config core.hooksPath .husky
-out=$(sh "$tmp/other/ch/install.sh" 2>&1); rc=$?
+out=$(sh "$tmp/other/ch/install.sh" node 2>&1); rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'verdict=FAIL'; check 'hooksPathがあれば止める' $? "$out"
 
 # rules.md の例（説明を差し替えて使う）
@@ -40,9 +49,9 @@ good() {
     printf '%s\n\n期限が切れても前の画面に留まり、操作がすべて失敗していた。\n期限切れを受けたらログイン画面へ戻す。\n\n%s\n\n---\n原因は思ったより手前にあった。\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n' \
         "${1:-fix(login): 期限切れのときにログイン画面へ戻す}" "${2:-確かめ: 単体テスト 42 件 PASS。}"
 }
-git add .gitignore Tools
+git add .gitignore Tools commit-hooks.conf
 good "chore: 試験の土台" > "$tmp/m"
-git commit -q -F "$tmp/m" >/dev/null 2>&1 || { echo 'HOOKS-TEST FAIL 土台のコミットができない'; exit 1; }
+git commit -q -F "$tmp/m" >/dev/null 2>&1 || { echo 'HOOKS-TEST FAIL 土台のコミットができない'; git commit -F "$tmp/m"; exit 1; }
 
 # expect <名> <pass|止める項目> <メッセージのファイル>  — ステージした中身でコミットを試し、結果を比べる
 expect() {
@@ -80,12 +89,29 @@ touchfile; good '' '確かめ：全角のコロン' > "$tmp/m"; expect '全角�
 touchfile; good 'docs(readme): 範囲つき' > "$tmp/m"; expect '範囲つき' pass "$tmp/m"
 touchfile; good | sed 's/$/\r/' > "$tmp/m"; expect 'CRLFのメッセージ' pass "$tmp/m"
 
+# --- 設定の 3 段
+touchfile; good 'perf: 速くする' > "$tmp/m"; expect '種類perfは既定で止める' M1 "$tmp/m"
+setconf 'profile=node' 'types=feat|fix|docs|refactor|chore|test|perf'
+touchfile; good 'perf: 速くする' > "$tmp/m"; expect 'repoのconfでperfを足す' pass "$tmp/m"
+setconf 'profile=node' 'subject_max=10'
+touchfile; good 'fix: 一二三四五六七八九十一' > "$tmp/m"; expect 'repoのconfで字数を変える' M2 "$tmp/m"
+setconf 'profile=nothing'
+touchfile; good > "$tmp/m"; expect 'profileが違えば止める' 'conf' "$tmp/m"
+mv commit-hooks.conf "$tmp/conf.bak"
+touchfile; good > "$tmp/m"; out=$(git commit -q -F "$tmp/m" 2>&1); rc=$?; git reset -q
+[ $rc -ne 0 ] && printf '%s' "$out" | grep -q 'COMMIT-HOOKS FAIL conf .*commit-hooks.conf が無い'; check 'confが無ければ止める' $? "$out"
+mv "$tmp/conf.bak" commit-hooks.conf
+setconf 'profile=node'
+
 # --- pre-commit（メッセージは rules.md の例）
 good > "$tmp/m"
 mkdir -p Saved; echo x > Saved/out.txt; git add -f Saved/out.txt; expect 'ignoreに当たるファイルをadd -f' P1 "$tmp/m"
 touchfile; expect '追跡済みのファイルの更新' pass "$tmp/m"
 echo SECRET=1 > .env; git add .env; expect '.envを足す' P2 "$tmp/m"
 rm -f .env
+setconf 'profile=node' 'secret_extra=^id_rsa$'
+echo k > id_rsa; git add id_rsa; expect 'confのsecret_extra' P2 "$tmp/m"
+rm -f id_rsa; setconf 'profile=node'
 mkdir -p big
 head -c $((96 * 1048576)) /dev/zero > big/96.dat; git add big/96.dat; expect '96MBのファイル' P3 "$tmp/m"
 rm -f big/96.dat
@@ -93,6 +119,29 @@ head -c $((60 * 1048576)) /dev/zero > big/60.dat; git add big/60.dat
 out60=$(git commit -q -F "$tmp/m" 2>&1); rc60=$?
 [ $rc60 -eq 0 ] && printf '%s' "$out60" | grep -q 'WARN P3'; check '60MBのファイル' $? "rc=$rc60
 $out60"
+
+# P4: フレームワーク別の生成物
+mkdir -p web/node_modules/x; echo x > web/node_modules/x/i.js; git add web/node_modules/x/i.js; expect 'node: node_modules' P4 "$tmp/m"
+mkdir -p dist; echo x > dist/a.js; git add dist/a.js; expect 'node: distは止めない' pass "$tmp/m"
+setconf 'profile=unreal'
+mkdir -p Plugins/P/Binaries/Win64; echo x > Plugins/P/Binaries/Win64/a.dll; git add Plugins/P/Binaries/Win64/a.dll; expect 'unreal: プラグインのBinaries' P4 "$tmp/m"
+mkdir -p Intermediate; echo x > Intermediate/a.txt; git add Intermediate/a.txt; expect 'unreal: Intermediate' P4 "$tmp/m"
+
+# P5: Unity の .meta
+setconf 'profile=unity'
+mkdir -p Library; echo x > Library/a.txt; git add Library/a.txt; expect 'unity: Library' P4 "$tmp/m"
+mkdir -p Assets/Library; echo x > Assets/Library/b.txt; echo m > Assets/Library/b.txt.meta; echo m > Assets/Library.meta
+git add Assets; expect 'unity: Assetsの中のLibraryは止めない' pass "$tmp/m"
+mkdir -p Assets/Img; echo x > Assets/Img/a.png; echo m > Assets/Img.meta; git add Assets/Img/a.png Assets/Img.meta; expect 'unity: アセットの.metaが無い' P5 "$tmp/m"
+echo m > Assets/Img/a.png.meta; git add Assets/Img/a.png Assets/Img/a.png.meta; expect 'unity: フォルダの.metaが無い' P5 "$tmp/m"
+git add Assets/Img Assets/Img.meta; expect 'unity: 全部そろえば通る' pass "$tmp/m"
+echo m > Assets/ghost.png.meta; git add Assets/ghost.png.meta; expect 'unity: .metaだけ' P5 "$tmp/m"
+rm -f Assets/ghost.png.meta
+mkdir -p Assets/.hidden; echo x > Assets/.hidden/a.txt; git add -f Assets/.hidden/a.txt; expect 'unity: 隠しフォルダは.meta不要' pass "$tmp/m"
+git rm -q Assets/Img/a.png; expect 'unity: 消して.metaが残る' P5 "$tmp/m"
+git rm -q Assets/Img/a.png Assets/Img/a.png.meta; expect 'unity: 一緒に消せば通る' pass "$tmp/m"
+setconf 'profile=node'
+mkdir -p Assets; echo x > Assets/n.png; git add Assets/n.png; expect 'node: .metaは見ない' pass "$tmp/m"
 
 if [ -z "$failed" ]; then echo "HOOKS-TEST PASS cases=$n"; exit 0; fi
 echo "HOOKS-TEST FAIL cases=$n failed=${failed#,}"

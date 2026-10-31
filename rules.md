@@ -31,7 +31,7 @@ Co-Authored-By: Claude {モデル名} <noreply@anthropic.com>
 
 | # | 検査 | 内容 |
 |---|---|---|
-| M1 | 件名の形 | `種類(範囲): 説明`。種類は上の 6 つ |
+| M1 | 件名の形 | `種類(範囲): 説明`。種類は上の 6 つ（repo で足せる。下の「値の 3 段」） |
 | M2 | 説明の長さ | `: ` より後が **40 字以内**（バイト数でなく文字数） |
 | M3 | 空行 | 件名の次の行が空行 |
 | M4 | 本文と確かめ | `確かめ:`（全角の `：` も可）の行があり、それ以外の本文も 1 行以上ある |
@@ -46,6 +46,20 @@ Co-Authored-By: Claude {モデル名} <noreply@anthropic.com>
 | P1 | 無理に足したもの | 今回**足す**ファイルのうち `.gitignore` に当たるもの（`git add -f`）を止める。載せない物の一覧は `.gitignore` だけで管理する |
 | P2 | 秘密 | `.env`・`.env.*`・`credentials.*`・`*.pem`・`*.key`・`.claude/settings.local.json` を足す・変えると止める |
 | P3 | 大きさ | 1 ファイルが 95MiB を超えたら止める（GitHub は 100MiB で push を拒む）。50MiB を超えたら警告だけ |
+| P4 | 生成物 | フレームワークが作るフォルダ（`generated=`。Unreal の `Binaries/`・Unity の `Library/`・Node.js の `node_modules/` など）を足す・変えると止める。`.gitignore` が漏れていても止まる |
+| P5 | Unity の `.meta` | `meta_pair=yes`（Unity）のとき。`Assets/` の下に足したファイルとその上のフォルダに `.meta` が無い・`.meta` だけを足す・アセットを消して `.meta` が残る、を止める |
+
+## 値の 3 段
+
+種類の一覧・字数・大きさ・生成物などの値は、上の段ほど優先して読む。
+
+| 段 | ファイル | 直す場所 |
+|---|---|---|
+| 1 | 取り込んだ repo の直下の `commit-hooks.conf`（`profile=` と、その repo だけの違い） | その repo。commit-hooks の更新では上書きされない |
+| 2 | `profiles/<profile>/profile.conf`（`unreal`・`unity`・`node`・`plain`） | このリポジトリ |
+| 3 | `profiles/common.conf`（全部の名前と既定） | このリポジトリ |
+
+上の表の数（40 字・95MiB など）は 3 段目の既定。フレームワーク別のステージの決まりは `profiles/<profile>/stage.md`。
 
 ## 止まったら
 
