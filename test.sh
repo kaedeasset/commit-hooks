@@ -87,7 +87,8 @@ touchfile; printf 'Revert "fix: ログインを直す"\n\nThis reverts commit ab
 touchfile; printf 'fixup! fix: ログインを直す\n' > "$tmp/m"; expect 'fixup' pass "$tmp/m"
 touchfile; good '' '確かめ：全角のコロン' > "$tmp/m"; expect '全角の確かめ' pass "$tmp/m"
 touchfile; good 'docs(readme): 範囲つき' > "$tmp/m"; expect '範囲つき' pass "$tmp/m"
-touchfile; good | sed 's/$/\r/' > "$tmp/m"; expect 'CRLFのメッセージ' pass "$tmp/m"
+# \r は Mac の sed が改行の文字にしないので awk で作る
+touchfile; good | awk '{ printf "%s\r\n", $0 }' > "$tmp/m"; expect 'CRLFのメッセージ' pass "$tmp/m"
 
 # --- 設定の 3 段
 touchfile; good 'perf: 速くする' > "$tmp/m"; expect '種類perfは既定で止める' M1 "$tmp/m"
@@ -111,7 +112,18 @@ echo SECRET=1 > .env; git add .env; expect '.envを足す' P2 "$tmp/m"
 rm -f .env
 setconf 'profile=node' 'secret_extra=^id_rsa$'
 echo k > id_rsa; git add id_rsa; expect 'confのsecret_extra' P2 "$tmp/m"
-rm -f id_rsa; setconf 'profile=node'
+rm -f id_rsa
+setconf 'profile=node' 'secret_extra=^id_rsa\.pub$'
+echo k > id_rsaXpub; git add id_rsaXpub; expect 'secret_extraの\.は文字どおり' pass "$tmp/m"
+echo k > id_rsa.pub; git add id_rsa.pub; expect 'secret_extraの\.で当たる' P2 "$tmp/m"
+rm -f id_rsa.pub; setconf 'profile=node'
+# OS が作るファイルはどの profile でも止める
+echo x > .DS_Store; git add -f .DS_Store; expect 'OSのファイル.DS_Store' P4 "$tmp/m"
+rm -f .DS_Store
+mkdir -p docs; echo x > docs/Thumbs.db; git add docs/Thumbs.db; expect 'OSのファイルThumbs.db' P4 "$tmp/m"
+rm -f docs/Thumbs.db
+echo x > 'docs/._note.md'; git add 'docs/._note.md'; expect 'OSのファイル._' P4 "$tmp/m"
+rm -f 'docs/._note.md'
 mkdir -p big
 head -c $((96 * 1048576)) /dev/zero > big/96.dat; git add big/96.dat; expect '96MBのファイル' P3 "$tmp/m"
 rm -f big/96.dat

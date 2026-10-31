@@ -46,7 +46,7 @@ Co-Authored-By: Claude {モデル名} <noreply@anthropic.com>
 | P1 | 無理に足したもの | 今回**足す**ファイルのうち `.gitignore` に当たるもの（`git add -f`）を止める。載せない物の一覧は `.gitignore` だけで管理する |
 | P2 | 秘密 | `.env`・`.env.*`・`credentials.*`・`*.pem`・`*.key`・`.claude/settings.local.json` を足す・変えると止める |
 | P3 | 大きさ | 1 ファイルが 95MiB を超えたら止める（GitHub は 100MiB で push を拒む）。50MiB を超えたら警告だけ |
-| P4 | 生成物 | フレームワークが作るフォルダ（`generated=`。Unreal の `Binaries/`・Unity の `Library/`・Node.js の `node_modules/` など）を足す・変えると止める。`.gitignore` が漏れていても止まる |
+| P4 | 生成物 | フレームワークが作るフォルダ（`generated=`。Unreal の `Binaries/`・Unity の `Library/`・Node.js の `node_modules/` など）と、OS が作るファイル（`generated_os=`。`.DS_Store`・`._*`・`Thumbs.db`・`desktop.ini`）を足す・変えると止める。`.gitignore` が漏れていても止まる |
 | P5 | Unity の `.meta` | `meta_pair=yes`（Unity）のとき。`Assets/` の下に足したファイルとその上のフォルダに `.meta` が無い・`.meta` だけを足す・アセットを消して `.meta` が残る、を止める |
 | P6 | マップの載せ漏れ（警告） | `ofpa_check=yes`（Unreal）のとき。1 アクタ 1 ファイルのマップ（`.umap` と `__ExternalActors__/<マップ>/`・`__ExternalObjects__/<マップ>/`）の一部だけをステージすると、残っている本数と先頭 3 本を警告する。コミットは止めない |
 | P7 | LFS の素通り | `lfs_check=yes`（既定）のとき。`.gitattributes` で `filter=lfs` の対象なのに、中身が 1KiB を超える（ポインタでない）ものを止める。`git lfs install` をしていない PC で起きる |

@@ -16,7 +16,7 @@ repo ごとの違いは、取り込んだフォルダの**外**の `commit-hooks
 | あるフレームワークの repo 全部に効くもの（生成物のフォルダ・`.meta`・ステージの決まり） | このリポジトリの `profiles/<profile>/`（`unreal`・`unity`・`node`・`plain`） | そのフレームワークの repo に入る |
 | その repo だけの違い（種類を足す・字数・生成物を足す） | 取り込んだ repo の直下の `commit-hooks.conf` | 上書きされない |
 
-フレームワークを足すときは `profiles/<名>/profile.conf` と `stage.md` を作り、`test.sh` に場合を足す。
+フレームワークを足すときは `profiles/<名>/profile.conf` と `stage.md` を作り、`test.sh` に場合を足し、「フレームワークごとの運用の違い」の表に列を足す。
 
 ## 中身
 
@@ -24,14 +24,14 @@ repo ごとの違いは、取り込んだフォルダの**外**の `commit-hooks
 |---|---|
 | `rules.md` | メッセージの形と検査の一覧（M1〜M5・P1〜P7）・値の 3 段 |
 | `hooks/commit-msg` | メッセージの形を検査する。外れたらコミットを止め、外れた項目とひな形を出す |
-| `hooks/pre-commit` | ステージした中身を検査する（`add -f`・秘密らしい名前・大きさ・生成物・Unity の `.meta`・Unreal のマップの載せ漏れ・LFS の素通り） |
+| `hooks/pre-commit` | ステージした中身を検査する（`add -f`・秘密らしい名前・大きさ・生成物と OS が作るファイル・Unity の `.meta`・Unreal のマップの載せ漏れ・LFS の素通り） |
 | `hooks/conf.sh` | 値を 3 段で読む |
 | `hooks/relay.sh` | 中継のひな形。`install.sh` が `.git/hooks/` に書く |
 | `profiles/common.conf` | 全部の値の名前と既定 |
 | `profiles/<profile>/profile.conf`・`stage.md` | フレームワーク別の値と、ステージの決まり（人と Claude Code が読む） |
 | `commit-hooks.conf.example` | repo の直下に置く設定のひな形（`install.sh` が写す） |
 | `install.sh` | 中継を書き、`commit-hooks.conf` が無ければ作る。`core.hooksPath` は変えない |
-| `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 58 の場合を回す |
+| `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 63 の場合を回す |
 | `skill/SKILL.md` | Claude Code のコミットスキルのひな形（1 度写す。中身は `rules.md` と `stage.md` を指すだけ） |
 
 sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標準の sh）。
@@ -66,7 +66,7 @@ sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標�
 3. 試す・入れる
 
    ```sh
-   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=58
+   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=63
    sh Tools/commit-hooks/install.sh unreal     # → HOOKS-INSTALL conf=created commit-msg=installed pre-commit=installed others=… verdict=PASS
    sh Tools/commit-hooks/install.sh unreal     # 2 回目 → conf=exists … unchanged
    ```
@@ -111,6 +111,49 @@ sh のファイルは LF でないと落ちる。このリポジトリの `.gita
 ```
 Tools/commit-hooks/** text eol=lf
 ```
+
+## フレームワークごとの運用の違い
+
+取り込み・返し方・受け取り方の流れはどのフレームワークでも同じ（下の「運用マニュアル」）。違うのは次のところだけ。
+ステージしない物とコミット前に確かめることの細目は `profiles/<profile>/stage.md`。
+
+| | Unreal（`unreal`） | Unity（`unity`） | Node.js（`node`） |
+|---|---|---|---|
+| フックの入れ方 | `install.sh unreal`。Git LFS のフックが `.git/hooks/` に並ぶが、そのまま残る | `install.sh unity` | husky・lefthook を使う repo では `install.sh` が止まる → その仕組みのフックから本体を呼ぶ（「hooksPath を使う repo」）。**husky を後から入れると、`npm install` のたびに `core.hooksPath` が書かれて中継が黙って効かなくなる**。入れたら同じ日に `.husky/` へ 2 本を足す |
+| 取り込む前の設定 | LFS を使うなら、全部の PC で `git lfs install`（忘れると P7 で止まる） | Project Settings の **Version Control → Mode = Visible Meta Files** と **Editor → Asset Serialization → Mode = Force Text**（新しいプロジェクトの既定はこの 2 つ。古いプロジェクトは確かめる）（バイナリのままだと .meta とシーンの差分が読めない）。LFS を使うなら `git lfs install` | なし |
+| 合わせられないファイル | `.uasset`・`.umap` はマージできない。同じアセットを 2 か所で同時に直さない（LFS を使うなら `git lfs lock`）。ぶつかったら片方を選ぶしかない | シーン・プレハブは Force Text なら UnityYAMLMerge（Smart Merge）で合わせられる。git の mergetool に登録しておく。テクスチャ・モデルは合わせられない | ロックファイルはぶつかったら手で合わせず、`package.json` を合わせてから `npm install` で作り直す |
+| まとめて変わるコミット | エンジンの版上げ・アセットの一括保存・リダイレクタの整理は、それだけのコミットに分ける（差分が大きく、ほかの変更が埋もれる） | エディタの版上げ（`ProjectSettings/ProjectVersion.txt`）と、それで書き換わるアセットは、それだけのコミットに分ける | 依存の一括更新は、それだけのコミットに分ける |
+| `確かめ:` に書くもの | C++ を変えたらビルドの結果（例 `確かめ: UE ビルド Succeeded（Result: Succeeded）`）。アセットだけならエディタで開いて確かめたこと | エディタでコンパイルエラー 0・Play で確かめたこと・テストランナーの結果 | `npm test`・型の検査・lint の結果（例 `確かめ: npm test 120 件 PASS・tsc エラー 0`） |
+| worktree | worktree ごとに `Intermediate/`・`DerivedDataCache/` が別にでき、最初のビルドが重い | worktree ごとに `Library/` が別にでき、最初の読み込みが重い | worktree ごとに `npm install` が要る |
+| 誰が育てるか | このリポジトリ（Unreal の repo で使いながら） | Unity の repo が育てて返す | Node.js の repo が育てて返す |
+
+フレームワークを足すときは、この表に列を足し、`profiles/<名>/` を作る。
+
+## Windows と Mac の違い
+
+フックは git が自分の sh で動かすので、どちらの OS でもコミットのときの動きは同じ。違うのは、手で回すときと、ファイルの扱い。
+
+| | Windows | Mac | どうする |
+|---|---|---|---|
+| `install.sh`・`test.sh` を手で回す | PowerShell・cmd では `sh` が見つからない（Git for Windows は `Git\cmd` だけを PATH に足す） | `sh` がある | Windows は Git Bash で回すか、`& "C:\Program Files\Git\bin\sh.exe" Tools/commit-hooks/install.sh unreal` |
+| 改行 | Git for Windows の既定は `core.autocrlf=true`。sh のファイルが CRLF で取り出されると落ちる | 既定は変換しない | 取り込み先の `.gitattributes` に `Tools/commit-hooks/** text eol=lf`（「改行」）。人ごとの autocrlf に頼らない |
+| 中継の実行の印 | 気にしなくてよい | 実行の印が無いフックは、git が注意を出して**飛ばす** | `install.sh` が `chmod +x` する。手で写したときは `chmod +x .git/hooks/commit-msg .git/hooks/pre-commit` |
+| 大文字小文字だけの名前の変更 | 区別しない（NTFS） | 既定は区別しない（APFS） | `git mv -f Foo.cpp foo.cpp` で変える（エクスプローラーや Finder で変えると git が気づかない）。区別する Linux の CI でだけ落ちる |
+| 日本語のファイル名 | そのまま | 濁点などが分かれた形（NFD）で保存される | Mac で `git config core.precomposeunicode` が `true`（既定）のままにする。`false` だと同じ名前が別のファイルとして入る |
+| パスの長さ | 260 字を超えると取り出せないことがある（`node_modules`・UE のプラグインの奥） | 制限は気にしなくてよい | Windows は `git config --global core.longpaths true` |
+| OS が作るファイル | `Thumbs.db`・`desktop.ini` | `.DS_Store`・`._*` | P4 がどの profile でも止める。`.gitignore` にも足しておく |
+| LFS | PC ごとに `git lfs install` | 同じ | 忘れると P7 で止まる |
+
+**フックやスクリプトを直して返す人へ:** 本体は POSIX の sh・awk・sed・grep だけで書く。GNU にしか無い書き方（`sed -i`・sed の置き換えの `\t` や `\r`・`grep -P`・`date +%N`・`awk -v` で正規表現を渡す）は Mac で動かないか、黙って違う結果になる。どちらかの OS で `test.sh` が PASS したら、もう一方でも回せるなら回す（返すときの報告にどちらで回したかを書く）。
+
+### Node.js（Windows と Mac の両方で使う repo）
+
+| | 注意 | どうする |
+|---|---|---|
+| npm scripts | Windows の npm は scripts を cmd.exe で動かす。`rm -rf`・`FOO=1 node …`・`cp` など sh の書き方は Windows で落ちる | `rimraf`・`cross-env` などを使うか、処理を `node scripts/x.mjs` に書く。`確かめ:` にどちらの OS で回したかを書く |
+| ロックファイル | 片方の OS で依存を足すと、もう片方の OS 用の任意の依存（`@esbuild/*`・`@rollup/rollup-*` など）がロックファイルから消えることがある（npm の既知の不具合）。もう一方の OS や CI で `Cannot find module @rollup/rollup-…` になる | 依存を変えたコミットは、ロックファイルの差分で別の OS 用の行が消えていないかを見る。消えていたら `node_modules` とロックファイルを消して `npm install` し直す |
+| husky | `.husky/` のフックは Windows でも Git for Windows の sh で動く。CRLF だと落ちる | `.gitattributes` に `.husky/** text eol=lf` |
+| `node_modules` | OS ごとにネイティブのモジュールが違う | PC の間で写さない・載せない（P4 が止める）。OS を替えたら `npm install` し直す |
 
 ## 運用マニュアル
 

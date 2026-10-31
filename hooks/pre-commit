@@ -16,6 +16,7 @@ extra=$(conf secret_extra) || exit 1
 failmib=$(conf size_fail_mib) || exit 1
 warnmib=$(conf size_warn_mib) || exit 1
 generated=$(conf generated) || exit 1
+generated_os=$(conf generated_os) || exit 1
 metapair=$(conf meta_pair) || exit 1
 ofpa=$(conf ofpa_check) || exit 1
 lfscheck=$(conf lfs_check) || exit 1
@@ -31,7 +32,9 @@ if [ -n "$p1" ]; then
 fi
 
 # P2: 秘密らしいファイル名（足す・変える）
-p2=$(staged ACMR | awk -v extra="$extra" '
+# 正規表現は環境変数で渡す（awk -v は \. などのエスケープを先に消す）
+p2=$(staged ACMR | CH_EXTRA="$extra" awk '
+BEGIN { extra = ENVIRON["CH_EXTRA"] }
 { n = split($0, a, "/"); b = a[n] }
 b == ".env" || b ~ /^\.env\./ || b ~ /^credentials\./ || b ~ /\.pem$/ || b ~ /\.key$/ || $0 == ".claude/settings.local.json" || (extra != "" && b ~ extra) { print }')
 if [ -n "$p2" ]; then
@@ -58,7 +61,10 @@ if [ -n "$p3" ]; then
 FAIL"*) fail=1 ;; esac
 fi
 
-# P4: 生成物のパス（足す・変える）
+# P4: 生成物のパス（足す・変える）。OS が作るファイル（generated_os）はフレームワークによらず止める
+if [ -n "$generated_os" ]; then
+    if [ -n "$generated" ]; then generated="$generated|$generated_os"; else generated="$generated_os"; fi
+fi
 if [ -n "$generated" ]; then
     p4=$(staged ACMR | grep -E -e "$generated")
     if [ -n "$p4" ]; then
