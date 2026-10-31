@@ -1,0 +1,48 @@
+#!/bin/sh
+# pre-commit — ステージした中身を検査する。決まりの正は commit-hooks の rules.md。
+# 中継の .git/hooks/pre-commit（install.sh が書く）から呼ばれる。
+#   P1 今回足すファイルが .gitignore に当たる（git add -f で無理に足したもの。載せない物の一覧は .gitignore だけが正）
+#   P2 秘密らしいファイル名（.env・.env.*・credentials.*・*.pem・*.key・.claude/settings.local.json）を足す・変える
+#   P3 1 ファイルが 95MiB を超える（GitHub は 100MiB で push を拒む）。50MiB を超えたら警告だけ
+# 外れたら PRE-COMMIT FAIL <P…> <パス> を出して 1 で終わる。警告は PRE-COMMIT WARN P3 <パス> <MiB>。
+# git commit --only のときは git が用意した一時インデックス（GIT_INDEX_FILE）を見る（環境変数をそのまま使う）。
+
+fail=0
+
+# P1: 足すファイルのうち ignore に当たるもの
+p1=$(git diff --cached --name-only --diff-filter=A -z | git check-ignore --no-index --stdin -z | tr '\0' '\n')
+if [ -n "$p1" ]; then
+    echo "$p1" | while IFS= read -r f; do echo "PRE-COMMIT FAIL P1 $f（.gitignore に当たる。購入物・生成物・焼いた物は載せない）" >&2; done
+    fail=1
+fi
+
+# P2: 秘密らしいファイル名（足す・変える）
+p2=$(git -c core.quotepath=off diff --cached --name-only --diff-filter=ACMR | awk '
+{ n = split($0, a, "/"); b = a[n] }
+b == ".env" || b ~ /^\.env\./ || b ~ /^credentials\./ || b ~ /\.pem$/ || b ~ /\.key$/ || $0 == ".claude/settings.local.json" { print }')
+if [ -n "$p2" ]; then
+    echo "$p2" | while IFS= read -r f; do echo "PRE-COMMIT FAIL P2 $f（秘密らしいファイル名。載せない）" >&2; done
+    fail=1
+fi
+
+# P3: ステージした中身の大きさ（blob の大きさ）
+# %(rest) は入力の 1 つ目の空白より後（パス）をそのまま返す。git を 1 回だけ起こす（ファイルごとに起こすと大きいコミットで遅い）
+p3=$(git -c core.quotepath=off diff --cached --raw --no-abbrev --diff-filter=ACMR | awk -F'\t' '{ split($1, m, " "); print m[4] " " $NF }' |
+    git cat-file --batch-check='%(objectsize)	%(rest)' | awk -F'\t' '
+    $1 > 95 * 1048576 { printf "FAIL\t%s\t%.1f\n", $2, $1 / 1048576; next }
+    $1 > 50 * 1048576 { printf "WARN\t%s\t%.1f\n", $2, $1 / 1048576 }')
+if [ -n "$p3" ]; then
+    printf '%s\n' "$p3" | while IFS="$(printf '\t')" read -r kind path mib; do
+        if [ "$kind" = FAIL ]; then
+            echo "PRE-COMMIT FAIL P3 $path ${mib}MiB（95MiB を超える。GitHub は 100MiB で push を拒む）" >&2
+        else
+            echo "PRE-COMMIT WARN P3 $path ${mib}MiB（50MiB を超える）" >&2
+        fi
+    done
+    case "$p3" in FAIL*|*"
+FAIL"*) fail=1 ;; esac
+fi
+
+[ "$fail" = 0 ] && exit 0
+echo "--no-verify は使わない。ステージから外す（git restore --staged <パス>）か、中身を直してコミットし直す。" >&2
+exit 1

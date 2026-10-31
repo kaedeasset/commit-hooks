@@ -1,0 +1,43 @@
+#!/bin/sh
+# install.sh — 共有の .git/hooks/ に中継の commit-msg・pre-commit を書く（本体はこのフォルダの hooks/）。
+#   sh <commit-hooks を置いたフォルダ>/install.sh
+# .git/hooks/ は全 worktree で共有なので、1 回入れれば全 worktree に効く。core.hooksPath は変えない（Git LFS などのフックが残る）。
+# 何度実行しても同じ。同名のフックが違う中身で既にあれば、中身を出して止める（上書きしない）。
+# core.hooksPath が設定されている（husky など）と .git/hooks/ は読まれないので、止める（README「hooksPath を使う repo」）。
+# 終わりの行: HOOKS-INSTALL commit-msg=installed|unchanged|conflict pre-commit=… others=<残っているフック> verdict=PASS|FAIL
+# 戻し方: .git/hooks/commit-msg と .git/hooks/pre-commit を消す。
+
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here" || exit 1
+# リポジトリの直下からこのフォルダまで（例 Tools/commit-hooks/。直下なら空）
+dir=$(git rev-parse --show-prefix) || exit 1
+common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
+hookdir="$common/hooks"
+
+hp=$(git config --get core.hooksPath)
+if [ -n "$hp" ]; then
+    echo "core.hooksPath=$hp が設定されている。.git/hooks/ の中継は読まれない。その仕組みのフックから本体を呼ぶ（README「hooksPath を使う repo」）"
+    echo "HOOKS-INSTALL commit-msg=skipped pre-commit=skipped others= verdict=FAIL"
+    exit 1
+fi
+
+mkdir -p "$hookdir"
+ok=1; state=""
+for name in commit-msg pre-commit; do
+    tmp="$hookdir/.$name.commit-hooks.tmp"
+    sed -e "s|@HOOK@|$name|g" -e "s|@DIR@|$dir|g" -e 's/\r$//' hooks/relay.sh > "$tmp"
+    if [ -f "$hookdir/$name" ]; then
+        if cmp -s "$tmp" "$hookdir/$name"; then
+            state="$state $name=unchanged"; rm -f "$tmp"; chmod +x "$hookdir/$name"; continue
+        fi
+        echo "FAIL: $hookdir/$name が別の中身で既にある（上書きしない。中身を見て、消してよければ消してから入れ直す）:"
+        cat "$hookdir/$name"
+        state="$state $name=conflict"; ok=0; rm -f "$tmp"; continue
+    fi
+    mv "$tmp" "$hookdir/$name"; chmod +x "$hookdir/$name"
+    state="$state $name=installed"
+done
+others=$(ls "$hookdir" | grep -v '\.sample$' | grep -v -x -e commit-msg -e pre-commit | tr '\n' ',' | sed 's/,$//')
+if [ $ok = 1 ]; then v=PASS; else v=FAIL; fi
+echo "HOOKS-INSTALL${state} others=$others verdict=$v"
+[ $ok = 1 ]
