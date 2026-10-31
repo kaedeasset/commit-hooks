@@ -2,7 +2,8 @@
 # test.sh — install.sh・設定の 3 段・commit-msg・pre-commit の試験。一時フォルダに使い捨ての repo を作り、
 # このフォルダを Tools/commit-hooks/ に写して install.sh で入れ、本物の git commit で回す。
 #   sh test.sh
-# 場合ごとに CASE <名> ok|NG、最後に HOOKS-TEST PASS|FAIL（外れた場合の名前つき）。
+# 最後の行に回した OS（os=windows|mac|linux）を出す。
+# 場合ごとに CASE <名> ok|NG、最後に HOOKS-TEST PASS|FAIL cases=<数> os=<OS>（外れた場合の名前つき）。
 
 src=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
@@ -190,6 +191,8 @@ rm -f Content/Raw.uasset
 printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 2048\n' 0 > Content/Ptr.uasset; nolfs add Content/Ptr.uasset; expect 'LFSのポインタは通る' pass "$tmp/m"
 head -c 2048 /dev/zero | tr '\0' 'x' > Content/raw.txt; git add Content/raw.txt; expect 'LFSの対象でなければ見ない' pass "$tmp/m"
 
-if [ -z "$failed" ]; then echo "HOOKS-TEST PASS cases=$n"; exit 0; fi
-echo "HOOKS-TEST FAIL cases=$n failed=${failed#,}"
+# どの OS で回したか（返すときの報告と確かめ: にそのまま書く）
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) os=windows ;; Darwin) os=mac ;; Linux) os=linux ;; *) os=$(uname -s) ;; esac
+if [ -z "$failed" ]; then echo "HOOKS-TEST PASS cases=$n os=$os"; exit 0; fi
+echo "HOOKS-TEST FAIL cases=$n os=$os failed=${failed#,}"
 exit 1

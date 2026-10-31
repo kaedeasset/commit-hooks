@@ -29,6 +29,8 @@ repo ごとの違いは、取り込んだフォルダの**外**の `commit-hooks
 | `hooks/relay.sh` | 中継のひな形。`install.sh` が `.git/hooks/` に書く |
 | `profiles/common.conf` | 全部の値の名前と既定 |
 | `profiles/<profile>/profile.conf`・`stage.md` | フレームワーク別の値と、ステージの決まり（人と Claude Code が読む） |
+| `os/windows.md`・`os/mac.md` | OS ごとの注意（その OS の repo が書く） |
+| `profiles/<profile>/windows.md`・`mac.md` | フレームワーク × OS の注意（要るものだけ） |
 | `commit-hooks.conf.example` | repo の直下に置く設定のひな形（`install.sh` が写す） |
 | `install.sh` | 中継を書き、`commit-hooks.conf` が無ければ作る。`core.hooksPath` は変えない |
 | `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 63 の場合を回す |
@@ -66,7 +68,7 @@ sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標�
 3. 試す・入れる
 
    ```sh
-   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=63
+   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=63 os=<OS>
    sh Tools/commit-hooks/install.sh unreal     # → HOOKS-INSTALL conf=created commit-msg=installed pre-commit=installed others=… verdict=PASS
    sh Tools/commit-hooks/install.sh unreal     # 2 回目 → conf=exists … unchanged
    ```
@@ -125,46 +127,61 @@ Tools/commit-hooks/** text eol=lf
 | まとめて変わるコミット | エンジンの版上げ・アセットの一括保存・リダイレクタの整理は、それだけのコミットに分ける（差分が大きく、ほかの変更が埋もれる） | エディタの版上げ（`ProjectSettings/ProjectVersion.txt`）と、それで書き換わるアセットは、それだけのコミットに分ける | 依存の一括更新は、それだけのコミットに分ける |
 | `確かめ:` に書くもの | C++ を変えたらビルドの結果（例 `確かめ: UE ビルド Succeeded（Result: Succeeded）`）。アセットだけならエディタで開いて確かめたこと | エディタでコンパイルエラー 0・Play で確かめたこと・テストランナーの結果 | `npm test`・型の検査・lint の結果（例 `確かめ: npm test 120 件 PASS・tsc エラー 0`） |
 | worktree | worktree ごとに `Intermediate/`・`DerivedDataCache/` が別にでき、最初のビルドが重い | worktree ごとに `Library/` が別にでき、最初の読み込みが重い | worktree ごとに `npm install` が要る |
-| 誰が育てるか | このリポジトリ（Unreal の repo で使いながら） | Unity の repo が育てて返す | Node.js の repo が育てて返す |
+| 誰が育てるか | このリポジトリ（力を入れる） | Unity の repo（土台だけ置いてある） | Node.js の repo（土台だけ置いてある）。OS ごとの担当は「担当表」 |
 
 フレームワークを足すときは、この表に列を足し、`profiles/<名>/` を作る。
 
-## Windows と Mac の違い
+## OS ごとの違い
 
-フックは git が自分の sh で動かすので、どちらの OS でもコミットのときの動きは同じ。違うのは、手で回すときと、ファイルの扱い。
+フックは git が自分の sh で動かすので、コミットのときの動きはどの OS でも同じ。違うのは、手で回すときとファイルの扱いで、**その OS で確かめられる repo が書く。**
 
-| | Windows | Mac | どうする |
-|---|---|---|---|
-| `install.sh`・`test.sh` を手で回す | PowerShell・cmd では `sh` が見つからない（Git for Windows は `Git\cmd` だけを PATH に足す） | `sh` がある | Windows は Git Bash で回すか、`& "C:\Program Files\Git\bin\sh.exe" Tools/commit-hooks/install.sh unreal` |
-| 改行 | Git for Windows の既定は `core.autocrlf=true`。sh のファイルが CRLF で取り出されると落ちる | 既定は変換しない | 取り込み先の `.gitattributes` に `Tools/commit-hooks/** text eol=lf`（「改行」）。人ごとの autocrlf に頼らない |
-| 中継の実行の印 | 気にしなくてよい | 実行の印が無いフックは、git が注意を出して**飛ばす** | `install.sh` が `chmod +x` する。手で写したときは `chmod +x .git/hooks/commit-msg .git/hooks/pre-commit` |
-| 大文字小文字だけの名前の変更 | 区別しない（NTFS） | 既定は区別しない（APFS） | `git mv -f Foo.cpp foo.cpp` で変える（エクスプローラーや Finder で変えると git が気づかない）。区別する Linux の CI でだけ落ちる |
-| 日本語のファイル名 | そのまま | 濁点などが分かれた形（NFD）で保存される | Mac で `git config core.precomposeunicode` が `true`（既定）のままにする。`false` だと同じ名前が別のファイルとして入る |
-| パスの長さ | 260 字を超えると取り出せないことがある（`node_modules`・UE のプラグインの奥） | 制限は気にしなくてよい | Windows は `git config --global core.longpaths true` |
-| OS が作るファイル | `Thumbs.db`・`desktop.ini` | `.DS_Store`・`._*` | P4 がどの profile でも止める。`.gitignore` にも足しておく |
-| LFS | PC ごとに `git lfs install` | 同じ | 忘れると P7 で止まる |
-
-**フックやスクリプトを直して返す人へ:** 本体は POSIX の sh・awk・sed・grep だけで書く。GNU にしか無い書き方（`sed -i`・sed の置き換えの `\t` や `\r`・`grep -P`・`date +%N`・`awk -v` で正規表現を渡す）は Mac で動かないか、黙って違う結果になる。どちらかの OS で `test.sh` が PASS したら、もう一方でも回せるなら回す（返すときの報告にどちらで回したかを書く）。
-
-### Node.js（Windows と Mac の両方で使う repo）
-
-| | 注意 | どうする |
+| ファイル | 中身 | 担当 |
 |---|---|---|
-| npm scripts | Windows の npm は scripts を cmd.exe で動かす。`rm -rf`・`FOO=1 node …`・`cp` など sh の書き方は Windows で落ちる | `rimraf`・`cross-env` などを使うか、処理を `node scripts/x.mjs` に書く。`確かめ:` にどちらの OS で回したかを書く |
-| ロックファイル | 片方の OS で依存を足すと、もう片方の OS 用の任意の依存（`@esbuild/*`・`@rollup/rollup-*` など）がロックファイルから消えることがある（npm の既知の不具合）。もう一方の OS や CI で `Cannot find module @rollup/rollup-…` になる | 依存を変えたコミットは、ロックファイルの差分で別の OS 用の行が消えていないかを見る。消えていたら `node_modules` とロックファイルを消して `npm install` し直す |
-| husky | `.husky/` のフックは Windows でも Git for Windows の sh で動く。CRLF だと落ちる | `.gitattributes` に `.husky/** text eol=lf` |
-| `node_modules` | OS ごとにネイティブのモジュールが違う | PC の間で写さない・載せない（P4 が止める）。OS を替えたら `npm install` し直す |
+| `os/windows.md` | Windows の注意（sh の場所・改行・パスの長さ…） | このリポジトリ |
+| `os/mac.md` | Mac の注意（BSD の道具・実行の印・NFD…） | Mac で使っている repo（いまは下書き・未確認） |
+| `profiles/<profile>/windows.md`・`mac.md` | そのフレームワークをその OS で使うときだけの注意 | その組み合わせで使っている repo |
+
+組み合わせのファイルは、要るものだけ作る（無ければ、まだその組み合わせで困ったことを書いた repo が無い）。全部の担当と状態は下の「担当表」。
+
+**フックやスクリプトを直す人へ（どの OS でも）:** 本体は POSIX の sh・awk・sed・grep だけで書く。GNU にしか無い書き方（`sed -i`・sed の置き換えの `\t` や `\r`・`grep -P`・`date +%N`・`awk -v` で正規表現を渡す）は Mac で動かないか、黙って違う結果になる。
 
 ## 運用マニュアル
 
-### 誰が何を育てるか
+### 担当表（フレームワーク × OS）
 
-| 部分 | 育てる repo | ここでの扱い |
-|---|---|---|
-| 共通（`rules.md`・`hooks/`・`profiles/common.conf`・`install.sh`・`test.sh`） | このリポジトリ | ここで直す |
-| `profiles/unreal/` | このリポジトリ（Unreal の repo で使いながら） | **力を入れる**。Unreal で踏んだ罠は検査にして足す |
-| `profiles/unity/`・`profiles/node/` | それぞれのフレームワークを使っている repo | 土台だけ置いている。育てるのはその repo で、直したら subtree push で返してもらう |
-| フレームワークの新しい profile | それを使う repo | `profiles/<名>/profile.conf`・`stage.md` と test.sh の場合を作って返す |
+| profile | 共通（`stage.md`・`profile.conf`） | Windows（`windows.md`） | Mac（`mac.md`） |
+|---|---|---|---|
+| （OS 全体） | — | `os/windows.md`: **このリポジトリ**・確かめ済み | `os/mac.md`: **Mac の repo**・下書き（未確認） |
+| `unreal` | **このリポジトリ**・力を入れる | **このリポジトリ**・確かめ済み | 未作成（Mac で UE を使う repo が作る） |
+| `unity` | Unity の repo・土台だけ | 未作成（Unity の repo が作る） | 未作成 |
+| `node` | Node.js の repo・土台だけ | Node.js の repo・下書き | 未作成（Mac の Node.js の repo が作る） |
+| `plain` | このリポジトリ | — | — |
+| `hooks/`・`install.sh`・`test.sh`・`common.conf`・`rules.md` | **このリポジトリ**。直したら全部の OS で `test.sh` が要る（下） | | |
+
+担当が変わったら、この表と、そのファイルの頭の「担当・状態」を一緒に書き換える。
+
+### 組み合わせごとの更新の仕方
+
+どの組み合わせも、流れは同じ（直す → `test.sh` → 返す → ここで main に入れる → 各 repo が受け取る）。違うのは、**どの OS で `test.sh` を回すか**と、**誰が確かめたことにするか**。
+
+`test.sh` の最後の行は `HOOKS-TEST PASS cases=<数> os=windows|mac|linux`。返すときの報告と、コミットの `確かめ:` にはこの行をそのまま書く。
+
+| 直したもの | 回す OS | main に入れる条件 | 入れた後 |
+|---|---|---|---|
+| `os/windows.md`・`profiles/*/windows.md` | Windows | Windows の `os=windows` の PASS | — |
+| `os/mac.md`・`profiles/*/mac.md` | Mac | Mac の `os=mac` の PASS | — |
+| `stage.md`・`profile.conf`（共通の部分） | 直した人の OS | その OS の PASS | ほかの OS の repo は、受け取ったときに `test.sh` を回す |
+| `hooks/`・`install.sh`・`test.sh`・`common.conf` | 直した人の OS | その OS の PASS。コミットの本文に、回していない OS を書く（例 `Mac では回していない`） | **受け取ったほかの OS の repo が `test.sh` を回す。FAIL ならその repo が直して返す**（下） |
+
+**ファイルの頭の「状態」:** その組み合わせで確かめたら、`<OS の版>・<道具の版> で test.sh PASS（日付）` に書き換える。下書きのまま確かめた repo が、下書きの印を外す。
+
+**ほかの OS で落ちたら（受け取った側）:**
+1. `test.sh` の外れた場合の名前と出力を見る。OS の道具の違い（BSD と GNU など）が多い
+2. 取り込み先で `Tools/commit-hooks/` の下だけを直し、自分の OS で PASS させる
+3. 返す（ブランチ名に OS を入れる: `from-<repo名>-mac-<YYYYMMDD>`）。報告に「どの OS で落ちて、どの OS で PASS させたか」を書く
+4. ここで main に入れる前に、元の OS（直した人の OS）でも `test.sh` を回す。両方 PASS で入れる
+
+**OS の注意を書き足す（その OS の repo）:** その OS で困ったこと・確かめたことを `os/<OS>.md`（どのフレームワークでも）か `profiles/<profile>/<OS>.md`（そのフレームワークだけ）に書き、`test.sh` を回して返す。ほかの OS のファイルには書かない（確かめられないので）。気づいたことは、その OS の担当の repo に伝える。
 
 ### 流れ（1 回の直しが全部の repo に届くまで）
 
@@ -184,11 +201,11 @@ main へ入れるのはこのリポジトリだけ。取り込み先は main へ
 **返さないもの:** その repo だけの違い（`commit-hooks.conf` に書く。取り込んだフォルダの外なので返らない）。
 
 1. 取り込み先で `Tools/commit-hooks/` の下**だけ**を変えたコミットを作る。ほかのファイルと混ぜない（混ぜたコミットも返るが、そのときの件名と本文がほかのファイルの話になる）。メッセージは `rules.md` の形で、件名の範囲に profile を書く（例 `feat(unity): …`・`fix(hooks): …`）。
-2. `sh Tools/commit-hooks/test.sh` が PASS すること。検査を足したなら、止まる場合と通る場合を test.sh に足してあること。
+2. `sh Tools/commit-hooks/test.sh` が PASS すること（最後の行 `HOOKS-TEST PASS cases=<数> os=<OS>` を報告に書く。OS ごとの決まりは「組み合わせごとの更新の仕方」）。検査を足したなら、止まる場合と通る場合を test.sh に足してあること。
 3. ブランチとして送る:
 
    ```sh
-   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<YYYYMMDD>
+   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<OS>-<YYYYMMDD>
    ```
 
    - 書き込みの権限が要る（kaedeasset の repo）。権限の無い人は、GitHub で fork してそこへ push し、PR を出す
@@ -200,11 +217,11 @@ main へ入れるのはこのリポジトリだけ。取り込み先は main へ
 
 ```sh
 git fetch origin
-git log --oneline main..origin/from-<repo名>-<日付>      # 何が来たか
-git diff main...origin/from-<repo名>-<日付> --stat
-git switch main && git merge --no-ff origin/from-<repo名>-<日付>   # 件名は Merge … なので検査に止められない
+git log --oneline main..origin/from-<repo名>-<OS>-<日付>      # 何が来たか
+git diff main...origin/from-<repo名>-<OS>-<日付> --stat
+git switch main && git merge --no-ff origin/from-<repo名>-<OS>-<日付>   # 件名は Merge … なので検査に止められない
 sh test.sh                                                 # HOOKS-TEST PASS
-git push origin main && git push origin --delete from-<repo名>-<日付>
+git push origin main && git push origin --delete from-<repo名>-<OS>-<日付>
 ```
 
 入れる前に見ること:
@@ -226,7 +243,7 @@ git push origin main && git push origin --delete from-<repo名>-<日付>
 
 ```sh
 git subtree pull --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
-sh Tools/commit-hooks/test.sh
+sh Tools/commit-hooks/test.sh      # 自分の OS で回す。FAIL なら「ほかの OS で落ちたら」
 ```
 
 - 中継は本体のパスを指すだけなので、`install.sh` を回し直す必要はない（回しても `unchanged`）

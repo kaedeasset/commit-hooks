@@ -8,6 +8,7 @@ description: Use when the user asks to commit changes, stage files, or create a 
 
 - **メッセージの形と検査の正:** `Tools/commit-hooks/rules.md`
 - **ステージしない物とコミット前に確かめること:** `Tools/commit-hooks/profiles/<profile>/stage.md`（`<profile>` は repo の直下の `commit-hooks.conf` の `profile=`）
+- **自分の OS の注意:** `Tools/commit-hooks/os/<windows|mac>.md` と、あれば `Tools/commit-hooks/profiles/<profile>/<windows|mac>.md`
 
 <!-- 取り込み先が Tools/commit-hooks 以外なら、上のパスを直す -->
 
