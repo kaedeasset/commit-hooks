@@ -2,7 +2,7 @@
 
 コミットメッセージの形と、載せてはいけない物を git のフックで検査する。決まりは [`rules.md`](rules.md)（これ 1 か所が正）。
 
-ほかのリポジトリはこれを `git subtree` で取り込み、更新は `git subtree pull` で受け取る。**取り込んだ側でフックや rules.md を直さない**（直すとここからの更新とぶつかる。直したいときはこのリポジトリを直す）。
+**このリポジトリが正。** 直すのは主にここ。ほかのリポジトリはこれを `git subtree` で取り込み、更新は `git subtree pull` で受け取る。取り込んだ側で直したときは、その日のうちに `git subtree push` でここへ送り返す（下の「取り込み先で直した分を返す」）。返さずに置くと、次の pull でぶつかる。
 
 **読む人: 取り込む側のリポジトリで働く Claude Code（Codex でも同じ）と人。**
 
@@ -76,6 +76,21 @@ sh Tools/commit-hooks/test.sh
 ```
 
 中継は本体のパスを指すだけなので、更新の後に `install.sh` を回し直す必要はない（回しても `unchanged`）。subtree の作るコミットは `Merge …` なので検査に止められない。
+
+### 取り込み先で直した分を返す
+
+1. 取り込み先で `Tools/commit-hooks/` の下**だけ**を変えたコミットを作る（ほかのファイルと混ぜない。混ぜると返るコミットにその repo の件名と本文が付いてくる）。`sh Tools/commit-hooks/test.sh` が PASS すること。
+2. ブランチとして送る（main へは直接送らない）:
+
+   ```sh
+   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<日付>
+   ```
+
+   履歴の長い repo では、分ける計算に数分かかる。
+3. このリポジトリで、そのブランチを読んで main に入れる（`gh pr create --base main --head <ブランチ>` で PR にするか、手元で `git merge --ff-only` か `git merge`）。test.sh を回してから。入れたらブランチを消す。
+4. 送った repo を含め、各 repo が「更新を受け取る」の pull をする。送った repo でもぶつからない（同じ中身が返ってくるだけ）。
+
+返す前にここで別の変更が入っていたら、3 で普通のマージになる。ぶつかったらここで解いて、各 repo は pull だけをする（取り込み先では解かない）。
 
 ### worktree を使っている repo
 
