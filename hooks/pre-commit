@@ -6,6 +6,8 @@
 #   P3 1 ファイルが size_fail_mib を超える（GitHub は 100MiB で push を拒む）。size_warn_mib を超えたら警告だけ
 #   P4 生成物のパス（generated。フレームワーク別）を足す・変える
 #   P5 Unity の .meta の対応（meta_pair=yes のとき）。足したアセットとその上のフォルダに .meta が無い・.meta だけを足す・アセットを消して .meta が残る
+#   P6 1 アクタ 1 ファイルのマップ（ofpa_check=yes のとき）で、同じマップのファイルがステージされずに残る（警告だけ）
+#   P7 LFS の対象なのに中身がポインタでない（lfs_check=yes のとき）
 # 外れたら PRE-COMMIT FAIL <P…> <パス> を出して 1 で終わる。警告は PRE-COMMIT WARN P3 <パス> <MiB>。
 # git commit --only のときは git が用意した一時インデックス（GIT_INDEX_FILE）を見る（環境変数をそのまま使う）。
 
@@ -15,6 +17,8 @@ failmib=$(conf size_fail_mib) || exit 1
 warnmib=$(conf size_warn_mib) || exit 1
 generated=$(conf generated) || exit 1
 metapair=$(conf meta_pair) || exit 1
+ofpa=$(conf ofpa_check) || exit 1
+lfscheck=$(conf lfs_check) || exit 1
 
 fail=0
 staged() { git -c core.quotepath=off diff --cached --name-only --diff-filter="$1"; }
@@ -109,6 +113,45 @@ if [ "$metapair" = yes ]; then
                 META-LEFT) echo "PRE-COMMIT FAIL P5 $path（アセットを消したのに .meta が残る。一緒に消す）" >&2 ;;
             esac
         done
+        fail=1
+    fi
+fi
+
+
+# P6: 1 アクタ 1 ファイルのマップの載せ漏れ（警告だけ）。ステージしたマップ（.umap か __ExternalActors__・__ExternalObjects__ の下）ごとに、
+# 同じマップのファイルで作業ツリーに変更が残っている・未追跡のものを数える。マップの名前は .umap が実際にある接頭辞で決める
+if [ "$ofpa" = yes ]; then
+    staged ACMRD | awk '
+    /\.umap$/ { i = index($0, "Content/"); if (i) { r = substr($0, 1, i + 7); m = substr($0, i + 8); sub(/\.umap$/, "", m); print "M\t" r "\t" m } next }
+    match($0, /(^|\/)Content\/__External(Actors|Objects)__\//) {
+        pre = substr($0, 1, RSTART + RLENGTH - 1); rest = substr($0, RSTART + RLENGTH)
+        r = pre; sub(/__External(Actors|Objects)__\/$/, "", r)
+        n = split(rest, a, "/"); c = ""
+        for (i = 1; i < n; i++) { c = (c == "" ? a[i] : c "/" a[i]); print "E\t" r "\t" c }
+    }' | while IFS="$tab" read -r kind root map; do
+        if [ "$kind" = M ] || [ -f "$root$map.umap" ]; then printf '%s\t%s\n' "$root" "$map"; fi
+    done | sort -u | while IFS="$tab" read -r root map; do
+        left=$(git -c core.quotepath=off status --porcelain=v1 -uall -- "${root}__ExternalActors__/$map/" "${root}__ExternalObjects__/$map/" "$root$map.umap" | awk '/^\?\?/ || substr($0, 2, 1) != " " { print substr($0, 4) }')
+        if [ -n "$left" ]; then
+            cnt=$(printf '%s\n' "$left" | wc -l | tr -d ' ')
+            echo "PRE-COMMIT WARN P6 $root$map.umap（同じマップのファイルが $cnt 本、ステージされずに残っている。マップを開くと読めなくなることがある）" >&2
+            printf '%s\n' "$left" | head -3 | sed 's/^/    /' >&2
+        fi
+    done
+fi
+
+# P7: LFS の対象（.gitattributes の filter=lfs）なのに、中身がポインタでなくそのまま入る（git lfs install を回していない PC で起きる）
+# ポインタは 200 バイトほど。1KiB を超えたらそのまま入っていると見る
+if [ "$lfscheck" = yes ]; then
+    p7=$(git -c core.quotepath=off diff --cached --raw --no-abbrev --diff-filter=ACMR | awk -F'\t' '{ split($1, m, " "); print m[4] " " $NF }' > "${TMPDIR:-/tmp}/ch-p7.$$"
+        awk '{ print substr($0, index($0, " ") + 1) }' "${TMPDIR:-/tmp}/ch-p7.$$" | git check-attr --cached --stdin filter | awk '/: filter: lfs$/ { sub(/: filter: lfs$/, ""); print }' > "${TMPDIR:-/tmp}/ch-p7l.$$"
+        if [ -s "${TMPDIR:-/tmp}/ch-p7l.$$" ]; then
+            awk 'NR == FNR { lfs[$0] = 1; next } (substr($0, index($0, " ") + 1) in lfs) { print }' "${TMPDIR:-/tmp}/ch-p7l.$$" "${TMPDIR:-/tmp}/ch-p7.$$" |
+                git cat-file --batch-check="%(objectsize)$tab%(rest)" | awk -F'\t' '$1 > 1024 { print $2 }'
+        fi
+        rm -f "${TMPDIR:-/tmp}/ch-p7.$$" "${TMPDIR:-/tmp}/ch-p7l.$$")
+    if [ -n "$p7" ]; then
+        echo "$p7" | while IFS= read -r f; do echo "PRE-COMMIT FAIL P7 $f（LFS の対象なのに中身がそのまま。git lfs install を回してから git add し直す）" >&2; done
         fail=1
     fi
 fi

@@ -2,7 +2,7 @@
 
 コミットメッセージの形と、載せてはいけない物を git のフックで検査する。決まりは [`rules.md`](rules.md)（これ 1 か所が正）。
 
-**このリポジトリが正。** 直すのは主にここ。ほかのリポジトリはこれを `git subtree` で取り込み、更新は `git subtree pull` で受け取る。取り込んだ側で直したときは、その日のうちに `git subtree push` でここへ送り返す（下の「取り込み先で直した分を返す」）。
+**このリポジトリが正。** 直すのは主にここ。ほかのリポジトリはこれを `git subtree` で取り込み、更新は `git subtree pull` で受け取る。取り込んだ側で直したときは、その日のうちに `git subtree push` でここへ送り返す（下の「運用マニュアル」）。
 
 **読む人: 取り込む側のリポジトリで働く Claude Code（Codex でも同じ）と人。**
 
@@ -22,16 +22,16 @@ repo ごとの違いは、取り込んだフォルダの**外**の `commit-hooks
 
 | ファイル | 役目 |
 |---|---|
-| `rules.md` | メッセージの形と検査の一覧（M1〜M5・P1〜P5）・値の 3 段 |
+| `rules.md` | メッセージの形と検査の一覧（M1〜M5・P1〜P7）・値の 3 段 |
 | `hooks/commit-msg` | メッセージの形を検査する。外れたらコミットを止め、外れた項目とひな形を出す |
-| `hooks/pre-commit` | ステージした中身を検査する（`add -f`・秘密らしい名前・大きさ・生成物・Unity の `.meta`） |
+| `hooks/pre-commit` | ステージした中身を検査する（`add -f`・秘密らしい名前・大きさ・生成物・Unity の `.meta`・Unreal のマップの載せ漏れ・LFS の素通り） |
 | `hooks/conf.sh` | 値を 3 段で読む |
 | `hooks/relay.sh` | 中継のひな形。`install.sh` が `.git/hooks/` に書く |
 | `profiles/common.conf` | 全部の値の名前と既定 |
 | `profiles/<profile>/profile.conf`・`stage.md` | フレームワーク別の値と、ステージの決まり（人と Claude Code が読む） |
 | `commit-hooks.conf.example` | repo の直下に置く設定のひな形（`install.sh` が写す） |
 | `install.sh` | 中継を書き、`commit-hooks.conf` が無ければ作る。`core.hooksPath` は変えない |
-| `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 50 の場合を回す |
+| `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 58 の場合を回す |
 | `skill/SKILL.md` | Claude Code のコミットスキルのひな形（1 度写す。中身は `rules.md` と `stage.md` を指すだけ） |
 
 sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標準の sh）。
@@ -66,7 +66,7 @@ sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標�
 3. 試す・入れる
 
    ```sh
-   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=50
+   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=58
    sh Tools/commit-hooks/install.sh unreal     # → HOOKS-INSTALL conf=created commit-msg=installed pre-commit=installed others=… verdict=PASS
    sh Tools/commit-hooks/install.sh unreal     # 2 回目 → conf=exists … unchanged
    ```
@@ -88,32 +88,6 @@ sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標�
 7. `commit-hooks.conf` と 6 の変更をコミットする。このコミットがフックの最初の本番になる。push はユーザーに言われたときだけ。
 
 **合格:** `HOOKS-TEST PASS`・`HOOKS-INSTALL … verdict=PASS`（2 回目は `conf=exists`・`unchanged`・元のフックが残る）・4 で旧い形が止まり新しい形が通る・7 のコミットが通る。報告には 1 の結果・選んだ profile・各コマンドの最後の行を書く。
-
-### 更新を受け取る
-
-```sh
-git subtree pull --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
-sh Tools/commit-hooks/test.sh
-```
-
-中継は本体のパスを指すだけなので、更新の後に `install.sh` を回し直す必要はない（回しても `unchanged`）。`commit-hooks.conf` は取り込んだフォルダの外なので変わらない。subtree の作るコミットは `Merge …` なので検査に止められない。
-
-### 取り込み先で直した分を返す
-
-その repo だけの違いなら返さない（`commit-hooks.conf` に書く）。ほかの repo にも効く直し（フックの不具合・フレームワーク別の決まり）だけを返す。
-
-1. 取り込み先で `Tools/commit-hooks/` の下**だけ**を変えたコミットを作る（ほかのファイルと混ぜない。混ぜると返るコミットにその repo の件名と本文が付いてくる）。`sh Tools/commit-hooks/test.sh` が PASS すること。
-2. ブランチとして送る（main へは直接送らない）:
-
-   ```sh
-   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<日付>
-   ```
-
-   履歴の長い repo では、分ける計算に数分かかる。
-3. このリポジトリで、そのブランチを読んで main に入れる（`gh pr create --base main --head <ブランチ>` で PR にするか、手元で `git merge`）。test.sh を回してから。入れたらブランチを消す。
-4. 送った repo を含め、各 repo が「更新を受け取る」の pull をする。送った repo でもぶつからない（同じ中身が返ってくるだけ）。
-
-返す前にここで別の変更が入っていたら、3 で普通のマージになる。ぶつかったらここで解いて、各 repo は pull だけをする（取り込み先では解かない）。
 
 ### worktree を使っている repo
 
@@ -137,6 +111,93 @@ sh のファイルは LF でないと落ちる。このリポジトリの `.gita
 ```
 Tools/commit-hooks/** text eol=lf
 ```
+
+## 運用マニュアル
+
+### 誰が何を育てるか
+
+| 部分 | 育てる repo | ここでの扱い |
+|---|---|---|
+| 共通（`rules.md`・`hooks/`・`profiles/common.conf`・`install.sh`・`test.sh`） | このリポジトリ | ここで直す |
+| `profiles/unreal/` | このリポジトリ（Unreal の repo で使いながら） | **力を入れる**。Unreal で踏んだ罠は検査にして足す |
+| `profiles/unity/`・`profiles/node/` | それぞれのフレームワークを使っている repo | 土台だけ置いている。育てるのはその repo で、直したら subtree push で返してもらう |
+| フレームワークの新しい profile | それを使う repo | `profiles/<名>/profile.conf`・`stage.md` と test.sh の場合を作って返す |
+
+### 流れ（1 回の直しが全部の repo に届くまで）
+
+```
+取り込み先 A で直す ──subtree push──▶ ここのブランチ from-A-<日付>
+                                              │ test.sh を回して main に入れる
+ここで直す ─────────────────────────────▶ main
+                                              │
+                  各 repo（A を含む）◀── subtree pull
+```
+
+main へ入れるのはこのリポジトリだけ。取り込み先は main へ直接 push しない。
+
+### 取り込み先で直した分を返す（subtree push）
+
+**返すもの:** ほかの repo にも効く直し（フックの不具合・検査の追加・フレームワーク別の決まり・stage.md の追記）。
+**返さないもの:** その repo だけの違い（`commit-hooks.conf` に書く。取り込んだフォルダの外なので返らない）。
+
+1. 取り込み先で `Tools/commit-hooks/` の下**だけ**を変えたコミットを作る。ほかのファイルと混ぜない（混ぜたコミットも返るが、そのときの件名と本文がほかのファイルの話になる）。メッセージは `rules.md` の形で、件名の範囲に profile を書く（例 `feat(unity): …`・`fix(hooks): …`）。
+2. `sh Tools/commit-hooks/test.sh` が PASS すること。検査を足したなら、止まる場合と通る場合を test.sh に足してあること。
+3. ブランチとして送る:
+
+   ```sh
+   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<YYYYMMDD>
+   ```
+
+   - 書き込みの権限が要る（kaedeasset の repo）。権限の無い人は、GitHub で fork してそこへ push し、PR を出す
+   - 履歴の長い repo では、分ける計算に数分かかる（`git subtree split` が全部の履歴をたどる）
+   - 同じ日に 2 回返すときは、ブランチ名の末尾に `-2` を付ける
+4. 返したことを、その repo の作業の報告に 1 行書く（ブランチ名）。ここの main に入るまでは、その repo の中で先に効いているだけ。
+
+### 返ってきたブランチを main に入れる（このリポジトリの作業）
+
+```sh
+git fetch origin
+git log --oneline main..origin/from-<repo名>-<日付>      # 何が来たか
+git diff main...origin/from-<repo名>-<日付> --stat
+git switch main && git merge --no-ff origin/from-<repo名>-<日付>   # 件名は Merge … なので検査に止められない
+sh test.sh                                                 # HOOKS-TEST PASS
+git push origin main && git push origin --delete from-<repo名>-<日付>
+```
+
+入れる前に見ること:
+- **共通の部分（`hooks/`・`common.conf`）を変えていないか。** 変えていれば、ほかのフレームワークの repo にも効く。Unreal の repo で試してから入れる
+- **既定を変えていないか。** `common.conf` の値（字数・種類・大きさ）を変えると全部の repo が変わる。その repo だけの事情なら、その repo の `commit-hooks.conf` へ戻してもらう
+- **新しい設定の名前には、必ず `common.conf` に既定を足しているか。** 既定が無いと、pull しただけの repo が全部 `COMMIT-HOOKS FAIL conf` で止まる
+- 外の人の PR なら、フックは誰の PC でも動くシェルなので、中身を全部読んでから入れる
+
+ぶつかったら、ここで解く。取り込み先では解かない（取り込み先は pull だけをする）。
+
+### ここで直す
+
+1. このリポジトリで直す。検査を変えたら test.sh に止まる場合と通る場合を足す。新しい設定の名前は `common.conf` に既定つきで足す（フレームワーク別の値は `profiles/<名>/profile.conf`）
+2. `sh test.sh` → `HOOKS-TEST PASS`
+3. コミットして push（このリポジトリにもフックが入っている。`sh install.sh plain`）
+4. 使っている repo に「pull して」と伝える（下）
+
+### 更新を受け取る（subtree pull）
+
+```sh
+git subtree pull --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
+sh Tools/commit-hooks/test.sh
+```
+
+- 中継は本体のパスを指すだけなので、`install.sh` を回し直す必要はない（回しても `unchanged`）
+- `commit-hooks.conf` は取り込んだフォルダの外なので変わらない
+- subtree の作るコミットは `Merge …` なので検査に止められない
+- 作業ツリーが汚れていると pull できない。先にコミットする
+- いつ pull するか: 返したブランチが main に入った後と、ここから「pull して」と言われたとき。毎日でなくてよい
+
+### やらないこと
+
+- 取り込み先で直して返さずに置く（次の pull でぶつかる・ほかの repo に届かない）
+- 取り込み先から main へ直接 push する
+- `--no-verify` で止まったコミットを通す（止まったら検査か中身のどちらが違うかを見る。検査が違うならここを直して返す）
+- 自分の repo の事情のために `common.conf` の既定を変える
 
 ## 戻し方
 

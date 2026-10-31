@@ -143,6 +143,41 @@ git rm -q Assets/Img/a.png Assets/Img/a.png.meta; expect 'unity: 一緒に消せ
 setconf 'profile=node'
 mkdir -p Assets; echo x > Assets/n.png; git add Assets/n.png; expect 'node: .metaは見ない' pass "$tmp/m"
 
+# --- Unreal（P4 のファイル・P6・P7）
+setconf 'profile=unreal'
+echo x > Game.sln; git add Game.sln; expect 'unreal: .sln' P4 "$tmp/m"
+rm -f Game.sln
+mkdir -p Source/G; echo x > Source/G/G.cpp; git add Source/G/G.cpp; expect 'unreal: Sourceは通る' pass "$tmp/m"
+# P6: マップ M と外部アクタ 2 本を土台にする
+mkdir -p Content/Maps Content/__ExternalActors__/Maps/M/0/AB Content/__ExternalObjects__/Maps/M/1
+echo m > Content/Maps/M.umap; echo a > Content/__ExternalActors__/Maps/M/0/AB/A1.uasset; echo b > Content/__ExternalActors__/Maps/M/0/AB/A2.uasset
+git add Content; good 'chore: マップの土台' > "$tmp/m6"; git commit -q -F "$tmp/m6" >/dev/null 2>&1
+echo a2 >> Content/__ExternalActors__/Maps/M/0/AB/A1.uasset; echo b2 >> Content/__ExternalActors__/Maps/M/0/AB/A2.uasset
+echo o > Content/__ExternalObjects__/Maps/M/1/O1.uasset
+git add Content/__ExternalActors__/Maps/M/0/AB/A1.uasset
+out=$(git commit -q -F "$tmp/m" 2>&1); rc=$?
+[ $rc -eq 0 ] && printf '%s' "$out" | grep -q 'WARN P6 Content/Maps/M.umap（同じマップのファイルが 2 本'; check 'unreal: マップの一部だけで警告' $? "rc=$rc
+$out"
+git add Content
+out=$(git commit -q -F "$tmp/m" 2>&1); rc=$?
+[ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q 'WARN P6'; check 'unreal: マップを全部載せれば警告なし' $? "rc=$rc
+$out"
+setconf 'profile=node'
+echo a3 >> Content/__ExternalActors__/Maps/M/0/AB/A1.uasset; echo b3 >> Content/__ExternalActors__/Maps/M/0/AB/A2.uasset
+git add Content/__ExternalActors__/Maps/M/0/AB/A1.uasset
+out=$(git commit -q -F "$tmp/m" 2>&1); rc=$?
+[ $rc -eq 0 ] && ! printf '%s' "$out" | grep -q 'WARN P6'; check 'node: P6は見ない' $? "rc=$rc
+$out"
+git checkout -q -- Content
+# P7: LFS の対象を、LFS の働かない設定で add する（中身がそのまま入る）
+printf '*.uasset filter=lfs diff=lfs merge=lfs -text\n' > .gitattributes; git add .gitattributes
+good 'chore: LFS の設定' > "$tmp/m7"; git commit -q -F "$tmp/m7" >/dev/null 2>&1
+nolfs() { git -c filter.lfs.clean=cat -c filter.lfs.smudge=cat -c filter.lfs.process= -c filter.lfs.required=false "$@"; }
+head -c 2048 /dev/zero | tr '\0' 'x' > Content/Raw.uasset; nolfs add Content/Raw.uasset; expect 'LFSの対象がそのまま' P7 "$tmp/m"
+rm -f Content/Raw.uasset
+printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 2048\n' 0 > Content/Ptr.uasset; nolfs add Content/Ptr.uasset; expect 'LFSのポインタは通る' pass "$tmp/m"
+head -c 2048 /dev/zero | tr '\0' 'x' > Content/raw.txt; git add Content/raw.txt; expect 'LFSの対象でなければ見ない' pass "$tmp/m"
+
 if [ -z "$failed" ]; then echo "HOOKS-TEST PASS cases=$n"; exit 0; fi
 echo "HOOKS-TEST FAIL cases=$n failed=${failed#,}"
 exit 1
