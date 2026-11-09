@@ -2,7 +2,7 @@
 
 - **担当:** このリポジトリ（Windows の Unreal の PC で使いながら直す）
 - **状態:** Windows 11・Git for Windows で `test.sh` PASS（2026-10-31）
-- **更新の仕方:** README「組み合わせごとの更新の仕方」
+- **更新の仕方:** docs/operations.md「組み合わせごとの更新の仕方」
 
 フックは git が自分の sh（Git for Windows の MSYS の sh）で動かすので、コミットのときは何もしなくてよい。気をつけるのは次のところ。
 

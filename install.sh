@@ -4,7 +4,7 @@
 # repo の直下に commit-hooks.conf（その repo だけの違い）が無ければ、commit-hooks.conf.example から作る。あれば上書きしない。
 # .git/hooks/ は全 worktree で共有なので、1 回入れれば全 worktree に効く。core.hooksPath は変えない（Git LFS などのフックが残る）。
 # 何度実行しても同じ。同名のフックが違う中身で既にあれば、中身を出して止める（上書きしない）。
-# core.hooksPath が設定されている（husky など）と .git/hooks/ は読まれないので、止める（README「hooksPath を使う repo」）。
+# core.hooksPath が設定されている（husky など）と .git/hooks/ は読まれないので、止める（docs/install.md「hooksPath を使う repo」）。
 # 終わりの行: HOOKS-INSTALL conf=created|exists|mismatch commit-msg=installed|unchanged|conflict pre-commit=… others=<残っているフック> verdict=PASS|FAIL
 # 戻し方: .git/hooks/commit-msg と .git/hooks/pre-commit を消す。
 
@@ -18,7 +18,7 @@ hookdir="$common/hooks"
 
 hp=$(git config --get core.hooksPath)
 if [ -n "$hp" ]; then
-    echo "core.hooksPath=$hp が設定されている。.git/hooks/ の中継は読まれない。その仕組みのフックから本体を呼ぶ（README「hooksPath を使う repo」）"
+    echo "core.hooksPath=$hp が設定されている。.git/hooks/ の中継は読まれない。その仕組みのフックから本体を呼ぶ（docs/install.md「hooksPath を使う repo」）"
     echo "HOOKS-INSTALL commit-msg=skipped pre-commit=skipped others= verdict=FAIL"
     exit 1
 fi

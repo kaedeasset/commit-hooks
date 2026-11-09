@@ -1,275 +1,145 @@
 # commit-hooks
 
-コミットメッセージの形と、載せてはいけない物を git のフックで検査する。決まりは [`rules.md`](rules.md)（これ 1 か所が正）。
+Claude Code が書くコミットを、git のフックで検査するキットです。「何を確かめたか」を書いていないメッセージや、`.env`・生成物・大きすぎるファイルが入ったコミットは、その場で止めて直し方を出します。Claude Code はそれを読んで、自分で直してコミットし直します。
 
-**このリポジトリが正。** 直すのは主にここ。ほかのリポジトリはこれを `git subtree` で取り込み、更新は `git subtree pull` で受け取る。取り込んだ側で直したときは、その日のうちに `git subtree push` でここへ送り返す（下の「運用マニュアル」）。
+## Summary (English)
 
-**読む人: 取り込む側のリポジトリで働く Claude Code（Codex でも同じ）と人。**
+Git hooks (plain POSIX `sh`, no dependencies) that check every commit Claude Code makes: the message must say *why*, *what was verified* (`確かめ:`) and a short retrospective, and the staged content must not include secrets, build outputs, oversized files or missing Unity `.meta` files.
+When a check fails, the hook prints which rule failed and a template, so the agent fixes the commit itself instead of reaching for `--no-verify`.
+Profiles for Unreal / Unity / Node.js / plain repos; shared via `git subtree`, with 63 cases tested by real `git commit` runs (`sh test.sh`).
 
-## どこを直すか（3 段）
+## こう止まる
 
-repo ごとの違いは、取り込んだフォルダの**外**の `commit-hooks.conf` に書く。だから pull しても上書きされない。
+Claude Code がよくやる「件名だけのコミット」は、こう止まります。
 
-| 直したいもの | 直す場所 | pull で |
+```text
+$ git commit -m "fixed some bugs and updated the login page and everything else too"
+COMMIT-MSG FAIL M1,M4,M5
+  M1 件名が「種類(範囲): 説明」の形でない（種類は feat|fix|docs|refactor|chore|test・範囲は省ける）
+  M4 「確かめ:」の行が無い（回していなければ「確かめ: なし（文書のみ）」）
+  M4 本文（なぜ・変えたこと）が無い
+  M5 「---」だけの行と、その後の感想（1〜3 行）が無い
+
+形（commit-hooks の rules.md）:
+  fix(login): 期限切れのときにログイン画面へ戻す
+  ...
+--no-verify は使わない。メッセージを直してコミットし直す。
+```
+
+載せてはいけない物も、ステージした時点で止まります。
+
+```text
+$ git add .env && git commit -F msg.txt
+PRE-COMMIT FAIL P2 .env（秘密らしいファイル名。載せない）
+--no-verify は使わない。ステージから外す（git restore --staged <パス>）か、中身を直してコミットし直す。
+```
+
+通るコミットはこの形です。あとから履歴を読んだ人が「なぜ」「何で確かめたか」を追えます。
+
+```text
+fix(login): 期限切れのときにログイン画面へ戻す
+
+期限が切れても前の画面に留まり、操作がすべて失敗していた。
+期限切れを受けたらログイン画面へ戻す。
+
+確かめ: 単体テスト 42 件 PASS。期限を 1 秒にして手で戻ることを確認。
+
+---
+原因は思ったより手前にあった。
+
+Co-Authored-By: Claude {モデル名} <noreply@anthropic.com>
+```
+
+## なぜフックで止めるのか
+
+AI にコミットを任せると、次のことが起きます。指示文や CLAUDE.md に書くだけでは、長い作業の途中で忘れられます。フックは git が必ず通るので、忘れても止まります。
+
+| 困りごと | 解き方 | 検査 |
 |---|---|---|
-| 全部の repo に効く決まり（メッセージの形・検査の仕組み・既定の値） | このリポジトリの `rules.md`・`hooks/`・`profiles/common.conf` | 全部の repo に入る |
-| あるフレームワークの repo 全部に効くもの（生成物のフォルダ・`.meta`・ステージの決まり） | このリポジトリの `profiles/<profile>/`（`unreal`・`unity`・`node`・`plain`） | そのフレームワークの repo に入る |
-| その repo だけの違い（種類を足す・字数・生成物を足す） | 取り込んだ repo の直下の `commit-hooks.conf` | 上書きされない |
+| 件名が長い・何をしたか分からない | `種類(範囲): 説明` の形で、説明は 40 字以内 | M1・M2・M3 |
+| 「できた」と書くが、何も回していない | `確かめ:` の行を必ず書かせる。回していなければ「なし」と書かせる | M4 |
+| なぜ変えたかが残らない | 本文を 1 行以上 | M4 |
+| 作業の手ごたえが残らない | `---` の後に 1〜3 行の感想（詰まったところが次の人の手がかりになる） | M5 |
+| `git add -f` で無視するはずの物を足す | `.gitignore` に当たるファイルを足したら止める | P1 |
+| `.env`・鍵・`settings.local.json` を載せる | 秘密らしい名前を止める | P2 |
+| 100MiB を超えて push が拒まれる | 95MiB で止め、50MiB で警告 | P3 |
+| `node_modules/`・`Library/`・`Binaries/`・`.DS_Store` を載せる | フレームワークごとの生成物と OS のファイルを止める | P4 |
+| Unity の `.meta` を忘れる・残す | アセットと `.meta` の対応を見る | P5 |
+| Unreal のマップの一部だけを載せる | 1 アクタ 1 ファイルの残りを警告する | P6 |
+| LFS の対象を素の中身のまま載せる | ポインタでない大きな中身を止める | P7 |
 
-フレームワークを足すときは `profiles/<名>/profile.conf` と `stage.md` を作り、`test.sh` に場合を足し、「フレームワークごとの運用の違い」の表に列を足す。
+止まったときの出力は、**AI がそのまま読んで直せる**ように書いてあります。外れた項目の番号・理由・正しい形のひな形・「`--no-verify` を使わない」の 4 つを必ず出します。
+
+全部の決まりの正は → [rules.md](rules.md)
+
+## Claude Code との組み合わせ
+
+| 道具 | 役目 |
+|---|---|
+| フック（`hooks/commit-msg`・`hooks/pre-commit`） | 検査する。止まったら直し方を出す |
+| スキル（[`skill/SKILL.md`](skill/SKILL.md)） | 「コミットして」で、変えたファイルだけをステージし、決まりの形でメッセージを書く。中身は `rules.md` を指すだけなので、1 度写せば更新しなくてよい |
+| CLAUDE.md に 1 行 | 「コミットの形と載せない物はフックが検査する。`--no-verify` を使わない」 |
+| `profiles/<profile>/stage.md` | フレームワークごとの「ステージしない物」「コミット前に確かめること」を、人と Claude Code の両方が読む |
+
+導入も Claude Code に任せられます。[導入ガイド](docs/install.md)は、Claude Code が上から順に実行して、各コマンドの最後の行（`HOOKS-TEST PASS`・`verdict=PASS`）で合否を判断できるように書いてあります。
+
+## 設計で決めたこと
+
+- **決まりは一か所に書く。** 形は `rules.md`、値は `profiles/`。スキルや CLAUDE.md には写さず、指すだけ。
+- **値は 3 段で上書きする。** 全体の既定（`profiles/common.conf`）→ フレームワーク別（`profiles/<profile>/profile.conf`）→ その repo だけ（取り込み先の直下の `commit-hooks.conf`）。3 段目は取り込んだフォルダの外にあるので、更新で上書きされない。
+- **依存を持たない。** POSIX の `sh`・`awk`・`sed`・`grep` だけ。Windows は Git for Windows の sh、Mac・Linux は標準の sh で動く。
+- **試験は本物の `git commit` で回す。** `test.sh` は使い捨ての repo を作り、入れて、63 の場合をコミットして確かめる。
+- **`git subtree` で配る。** 取り込んだ repo で直した分は `subtree push` で送り返し、ここで main に入れて全部の repo に届ける。
+
+## 選べる profile
+
+| profile | 向いている repo | 主に足す検査 |
+|---|---|---|
+| `unreal` | `.uproject` がある | `Binaries/`・`Intermediate/`・`Saved/` など・マップの載せ漏れ（P6）・LFS |
+| `unity` | `Assets/` と `ProjectSettings/` がある | `Library/`・`Temp/` など・`.meta` の対応（P5） |
+| `node` | `package.json` がある | `node_modules/`・`dist/` など |
+| `plain` | どれでもない | 共通の検査だけ |
+
+## 使ってみる
+
+取り込み先のリポジトリのルートで:
+
+```sh
+git subtree add --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
+sh Tools/commit-hooks/test.sh            # → HOOKS-TEST PASS cases=63 os=<OS>
+sh Tools/commit-hooks/install.sh node    # → HOOKS-INSTALL ... verdict=PASS（profile は上の表から）
+git commit --allow-empty -m "fix: 試し"   # → M4・M5 で止まれば効いている
+```
+
+Claude Code に頼むなら、このプロンプトで導入できます。
+
+```text
+https://github.com/kaedeasset/commit-hooks の docs/install.md のとおりに、このリポジトリへ commit-hooks を取り込んで。
+1 の調べた結果・選んだ profile・各コマンドの最後の行を報告して。push はしないで。
+```
+
+husky・lefthook を使っている repo、既にフックがある repo、worktree を使っている repo の分かれ道は → [導入ガイド](docs/install.md)
+
+止めたいときは `$(git rev-parse --git-common-dir)/hooks/` の `commit-msg` と `pre-commit` を消すだけです。
 
 ## 中身
 
-| ファイル | 役目 |
+| 置き場 | 中身 |
 |---|---|
-| `rules.md` | メッセージの形と検査の一覧（M1〜M5・P1〜P7）・値の 3 段 |
-| `hooks/commit-msg` | メッセージの形を検査する。外れたらコミットを止め、外れた項目とひな形を出す |
-| `hooks/pre-commit` | ステージした中身を検査する（`add -f`・秘密らしい名前・大きさ・生成物と OS が作るファイル・Unity の `.meta`・Unreal のマップの載せ漏れ・LFS の素通り） |
-| `hooks/conf.sh` | 値を 3 段で読む |
-| `hooks/relay.sh` | 中継のひな形。`install.sh` が `.git/hooks/` に書く |
-| `profiles/common.conf` | 全部の値の名前と既定 |
-| `profiles/<profile>/profile.conf`・`stage.md` | フレームワーク別の値と、ステージの決まり（人と Claude Code が読む） |
-| `os/windows.md`・`os/mac.md` | OS ごとの注意（その OS の repo が書く） |
-| `profiles/<profile>/windows.md`・`mac.md` | フレームワーク × OS の注意（要るものだけ） |
-| `commit-hooks.conf.example` | repo の直下に置く設定のひな形（`install.sh` が写す） |
-| `install.sh` | 中継を書き、`commit-hooks.conf` が無ければ作る。`core.hooksPath` は変えない |
-| `test.sh` | 使い捨ての repo で入れて、本物の `git commit` で 63 の場合を回す |
-| `skill/SKILL.md` | Claude Code のコミットスキルのひな形（1 度写す。中身は `rules.md` と `stage.md` を指すだけ） |
-
-sh だけで動く（Windows は Git for Windows の sh・Mac と Linux は標準の sh）。
-
-## 取り込む
-
-取り込み先のルートで。置き場は `Tools/commit-hooks` を既定にする（変えるなら下の全部のパスを替える）。
-
-1. 調べる（結果で分かれる）
-
-   ```sh
-   git config --get core.hooksPath                                    # A
-   ls "$(git rev-parse --git-common-dir)/hooks" | grep -v '\.sample$'  # B
-   git log -50 --format=%s | head -20                                 # C
-   ls *.uproject Assets/ ProjectSettings/ package.json 2>/dev/null    # D
-   ```
-
-   | 結果 | すること |
-   |---|---|
-   | A が空 | このまま進む |
-   | A に値がある（husky・lefthook など） | 下の「hooksPath を使う repo」 |
-   | B に `commit-msg` か `pre-commit` がある | `install.sh` は上書きせず FAIL で止まる。中身を読み、残すものならユーザーに確かめる |
-   | C に `feat` 〜 `test` 以外の種類が多い | 5 で `commit-hooks.conf` の `types=` に足す |
-   | D | profile を決める: `.uproject` → `unreal`・`Assets/` と `ProjectSettings/` → `unity`・`package.json` → `node`・どれも無い → `plain`。Unity のプロジェクトが repo の 1 段下にあれば、5 で `generated=` を上書きする（`profiles/unity/profile.conf` の注） |
-
-2. 取り込む（取り込み先の作業ツリーが綺麗な状態で）
-
-   ```sh
-   git subtree add --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
-   ```
-
-3. 試す・入れる
-
-   ```sh
-   sh Tools/commit-hooks/test.sh               # → HOOKS-TEST PASS cases=63 os=<OS>
-   sh Tools/commit-hooks/install.sh unreal     # → HOOKS-INSTALL conf=created commit-msg=installed pre-commit=installed others=… verdict=PASS
-   sh Tools/commit-hooks/install.sh unreal     # 2 回目 → conf=exists … unchanged
-   ```
-
-   `others=` に、1 の B で見たフック（Git LFS の `post-checkout` など）が残っていること。
-
-4. 本物で確かめる
-
-   - `git commit --allow-empty -m "fix: 試し"` → M4・M5 で止まる
-   - `rules.md` の形のファイルで `git commit --allow-empty -F <ファイル>` → 通る → `git reset --soft HEAD~1` で取り消す
-
-5. その repo だけの違いを `commit-hooks.conf` に書く（1 の C・D で要ると分かったものだけ）。
-
-6. スキルと規約
-   - `skill/SKILL.md` を `.claude/skills/commit/SKILL.md` に写す。既にあるなら、メッセージとステージの決まりのうち `rules.md`・`stage.md` と重なる節を「正は `Tools/commit-hooks/…`」に置き換え、その repo だけの決まりは残す
-   - `CLAUDE.md`（Codex なら `AGENTS.md` も）に 1 行: 「**コミットメッセージの形と載せない物はフックが検査する**（形は `Tools/commit-hooks/rules.md`。`--no-verify` を使わない）」
-   - 取り込み先の `.gitattributes` に `Tools/commit-hooks/** text eol=lf`（下の「改行」）
-
-7. `commit-hooks.conf` と 6 の変更をコミットする。このコミットがフックの最初の本番になる。push はユーザーに言われたときだけ。
-
-**合格:** `HOOKS-TEST PASS`・`HOOKS-INSTALL … verdict=PASS`（2 回目は `conf=exists`・`unchanged`・元のフックが残る）・4 で旧い形が止まり新しい形が通る・7 のコミットが通る。報告には 1 の結果・選んだ profile・各コマンドの最後の行を書く。
-
-### worktree を使っている repo
-
-`.git/hooks/` は全 worktree で共有なので `install.sh` は 1 回でよい。本体と `commit-hooks.conf` は各 worktree の追跡ファイルを読むので、まだ取り込んでいないブランチの worktree では中継が「無い」と出して検査を飛ばす（取り込んだ main を入れれば効き始める）。
-
-### hooksPath を使う repo
-
-`core.hooksPath` があると `.git/hooks/` は読まれない。仕組みは外さず、その仕組みのフックから本体を呼ぶ（`commit-hooks.conf` はひな形 `commit-hooks.conf.example` を repo の直下に写して `profile=` を書く）。husky なら:
-
-```sh
-# .husky/commit-msg
-sh Tools/commit-hooks/hooks/commit-msg "$1"
-# .husky/pre-commit
-sh Tools/commit-hooks/hooks/pre-commit
-```
-
-### 改行
-
-sh のファイルは LF でないと落ちる。このリポジトリの `.gitattributes` は subtree では効かないので、取り込み先の `.gitattributes` に足す:
-
-```
-Tools/commit-hooks/** text eol=lf
-```
-
-## フレームワークごとの運用の違い
-
-取り込み・返し方・受け取り方の流れはどのフレームワークでも同じ（下の「運用マニュアル」）。違うのは次のところだけ。
-ステージしない物とコミット前に確かめることの細目は `profiles/<profile>/stage.md`。
-
-| | Unreal（`unreal`） | Unity（`unity`） | Node.js（`node`） |
-|---|---|---|---|
-| フックの入れ方 | `install.sh unreal`。Git LFS のフックが `.git/hooks/` に並ぶが、そのまま残る | `install.sh unity` | husky・lefthook を使う repo では `install.sh` が止まる → その仕組みのフックから本体を呼ぶ（「hooksPath を使う repo」）。**husky を後から入れると、`npm install` のたびに `core.hooksPath` が書かれて中継が黙って効かなくなる**。入れたら同じ日に `.husky/` へ 2 本を足す |
-| 取り込む前の設定 | LFS を使うなら、全部の PC で `git lfs install`（忘れると P7 で止まる） | Project Settings の **Version Control → Mode = Visible Meta Files** と **Editor → Asset Serialization → Mode = Force Text**（新しいプロジェクトの既定はこの 2 つ。古いプロジェクトは確かめる）（バイナリのままだと .meta とシーンの差分が読めない）。LFS を使うなら `git lfs install` | なし |
-| 合わせられないファイル | `.uasset`・`.umap` はマージできない。同じアセットを 2 か所で同時に直さない（LFS を使うなら `git lfs lock`）。ぶつかったら片方を選ぶしかない | シーン・プレハブは Force Text なら UnityYAMLMerge（Smart Merge）で合わせられる。git の mergetool に登録しておく。テクスチャ・モデルは合わせられない | ロックファイルはぶつかったら手で合わせず、`package.json` を合わせてから `npm install` で作り直す |
-| まとめて変わるコミット | エンジンの版上げ・アセットの一括保存・リダイレクタの整理は、それだけのコミットに分ける（差分が大きく、ほかの変更が埋もれる） | エディタの版上げ（`ProjectSettings/ProjectVersion.txt`）と、それで書き換わるアセットは、それだけのコミットに分ける | 依存の一括更新は、それだけのコミットに分ける |
-| `確かめ:` に書くもの | C++ を変えたらビルドの結果（例 `確かめ: UE ビルド Succeeded（Result: Succeeded）`）。アセットだけならエディタで開いて確かめたこと | エディタでコンパイルエラー 0・Play で確かめたこと・テストランナーの結果 | `npm test`・型の検査・lint の結果（例 `確かめ: npm test 120 件 PASS・tsc エラー 0`） |
-| worktree | worktree ごとに `Intermediate/`・`DerivedDataCache/` が別にでき、最初のビルドが重い | worktree ごとに `Library/` が別にでき、最初の読み込みが重い | worktree ごとに `npm install` が要る |
-| 誰が育てるか | このリポジトリ（力を入れる） | Unity の repo（土台だけ置いてある） | Node.js の repo（土台だけ置いてある）。OS ごとの担当は「担当表」 |
-
-フレームワークを足すときは、この表に列を足し、`profiles/<名>/` を作る。
-
-## OS ごとの違い
-
-フックは git が自分の sh で動かすので、コミットのときの動きはどの OS でも同じ。違うのは、手で回すときとファイルの扱いで、**その OS で確かめられる repo が書く。**
-
-| ファイル | 中身 | 担当 |
-|---|---|---|
-| `os/windows.md` | Windows の注意（sh の場所・改行・パスの長さ…） | このリポジトリ |
-| `os/mac.md` | Mac の注意（BSD の道具・実行の印・NFD…） | Mac で使っている repo（いまは下書き・未確認） |
-| `profiles/<profile>/windows.md`・`mac.md` | そのフレームワークをその OS で使うときだけの注意 | その組み合わせで使っている repo |
-
-組み合わせのファイルは、要るものだけ作る（無ければ、まだその組み合わせで困ったことを書いた repo が無い）。全部の担当と状態は下の「担当表」。
-
-**フックやスクリプトを直す人へ（どの OS でも）:** 本体は POSIX の sh・awk・sed・grep だけで書く。GNU にしか無い書き方（`sed -i`・sed の置き換えの `\t` や `\r`・`grep -P`・`date +%N`・`awk -v` で正規表現を渡す）は Mac で動かないか、黙って違う結果になる。
-
-## 運用マニュアル
-
-### 担当表（フレームワーク × OS）
-
-| profile | 共通（`stage.md`・`profile.conf`） | Windows（`windows.md`） | Mac（`mac.md`） |
-|---|---|---|---|
-| （OS 全体） | — | `os/windows.md`: **このリポジトリ**・確かめ済み | `os/mac.md`: **Mac の repo**・下書き（未確認） |
-| `unreal` | **このリポジトリ**・力を入れる | **このリポジトリ**・確かめ済み | 未作成（Mac で UE を使う repo が作る） |
-| `unity` | Unity の repo・土台だけ | 未作成（Unity の repo が作る） | 未作成 |
-| `node` | Node.js の repo・土台だけ | Node.js の repo・下書き | 未作成（Mac の Node.js の repo が作る） |
-| `plain` | このリポジトリ | — | — |
-| `hooks/`・`install.sh`・`test.sh`・`common.conf`・`rules.md` | **このリポジトリ**。直したら全部の OS で `test.sh` が要る（下） | | |
-
-担当が変わったら、この表と、そのファイルの頭の「担当・状態」を一緒に書き換える。
-
-### 組み合わせごとの更新の仕方
-
-どの組み合わせも、流れは同じ（直す → `test.sh` → 返す → ここで main に入れる → 各 repo が受け取る）。違うのは、**どの OS で `test.sh` を回すか**と、**誰が確かめたことにするか**。
-
-`test.sh` の最後の行は `HOOKS-TEST PASS cases=<数> os=windows|mac|linux`。返すときの報告と、コミットの `確かめ:` にはこの行をそのまま書く。
-
-| 直したもの | 回す OS | main に入れる条件 | 入れた後 |
-|---|---|---|---|
-| `os/windows.md`・`profiles/*/windows.md` | Windows | Windows の `os=windows` の PASS | — |
-| `os/mac.md`・`profiles/*/mac.md` | Mac | Mac の `os=mac` の PASS | — |
-| `stage.md`・`profile.conf`（共通の部分） | 直した人の OS | その OS の PASS | ほかの OS の repo は、受け取ったときに `test.sh` を回す |
-| `hooks/`・`install.sh`・`test.sh`・`common.conf` | 直した人の OS | その OS の PASS。コミットの本文に、回していない OS を書く（例 `Mac では回していない`） | **受け取ったほかの OS の repo が `test.sh` を回す。FAIL ならその repo が直して返す**（下） |
-
-**ファイルの頭の「状態」:** その組み合わせで確かめたら、`<OS の版>・<道具の版> で test.sh PASS（日付）` に書き換える。下書きのまま確かめた repo が、下書きの印を外す。
-
-**ほかの OS で落ちたら（受け取った側）:**
-1. `test.sh` の外れた場合の名前と出力を見る。OS の道具の違い（BSD と GNU など）が多い
-2. 取り込み先で `Tools/commit-hooks/` の下だけを直し、自分の OS で PASS させる
-3. 返す（ブランチ名に OS を入れる: `from-<repo名>-mac-<YYYYMMDD>`）。報告に「どの OS で落ちて、どの OS で PASS させたか」を書く
-4. ここで main に入れる前に、元の OS（直した人の OS）でも `test.sh` を回す。両方 PASS で入れる
-
-**OS の注意を書き足す（その OS の repo）:** その OS で困ったこと・確かめたことを `os/<OS>.md`（どのフレームワークでも）か `profiles/<profile>/<OS>.md`（そのフレームワークだけ）に書き、`test.sh` を回して返す。ほかの OS のファイルには書かない（確かめられないので）。気づいたことは、その OS の担当の repo に伝える。
-
-### 流れ（1 回の直しが全部の repo に届くまで）
-
-```
-取り込み先 A で直す ──subtree push──▶ ここのブランチ from-A-<日付>
-                                              │ test.sh を回して main に入れる
-ここで直す ─────────────────────────────▶ main
-                                              │
-                  各 repo（A を含む）◀── subtree pull
-```
-
-main へ入れるのはこのリポジトリだけ。取り込み先は main へ直接 push しない。
-
-### 取り込み先で直した分を返す（subtree push）
-
-**返すもの:** ほかの repo にも効く直し（フックの不具合・検査の追加・フレームワーク別の決まり・stage.md の追記）。
-**返さないもの:** その repo だけの違い（`commit-hooks.conf` に書く。取り込んだフォルダの外なので返らない）。
-
-1. 取り込み先で `Tools/commit-hooks/` の下**だけ**を変えたコミットを作る。ほかのファイルと混ぜない（混ぜたコミットも返るが、そのときの件名と本文がほかのファイルの話になる）。メッセージは `rules.md` の形で、件名の範囲に profile を書く（例 `feat(unity): …`・`fix(hooks): …`）。
-2. `sh Tools/commit-hooks/test.sh` が PASS すること（最後の行 `HOOKS-TEST PASS cases=<数> os=<OS>` を報告に書く。OS ごとの決まりは「組み合わせごとの更新の仕方」）。検査を足したなら、止まる場合と通る場合を test.sh に足してあること。
-3. ブランチとして送る:
-
-   ```sh
-   git subtree push --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git from-<repo名>-<OS>-<YYYYMMDD>
-   ```
-
-   - 書き込みの権限が要る（kaedeasset の repo）。権限の無い人は、GitHub で fork してそこへ push し、PR を出す
-   - 履歴の長い repo では、分ける計算に数分かかる（`git subtree split` が全部の履歴をたどる）
-   - 同じ日に 2 回返すときは、ブランチ名の末尾に `-2` を付ける
-4. 返したことを、その repo の作業の報告に 1 行書く（ブランチ名）。ここの main に入るまでは、その repo の中で先に効いているだけ。
-
-### 返ってきたブランチを main に入れる（このリポジトリの作業）
-
-```sh
-git fetch origin
-git log --oneline main..origin/from-<repo名>-<OS>-<日付>      # 何が来たか
-git diff main...origin/from-<repo名>-<OS>-<日付> --stat
-git switch main && git merge --no-ff origin/from-<repo名>-<OS>-<日付>   # 件名は Merge … なので検査に止められない
-sh test.sh                                                 # HOOKS-TEST PASS
-git push origin main && git push origin --delete from-<repo名>-<OS>-<日付>
-```
-
-入れる前に見ること:
-- **共通の部分（`hooks/`・`common.conf`）を変えていないか。** 変えていれば、ほかのフレームワークの repo にも効く。Unreal の repo で試してから入れる
-- **既定を変えていないか。** `common.conf` の値（字数・種類・大きさ）を変えると全部の repo が変わる。その repo だけの事情なら、その repo の `commit-hooks.conf` へ戻してもらう
-- **新しい設定の名前には、必ず `common.conf` に既定を足しているか。** 既定が無いと、pull しただけの repo が全部 `COMMIT-HOOKS FAIL conf` で止まる
-- 外の人の PR なら、フックは誰の PC でも動くシェルなので、中身を全部読んでから入れる
-
-ぶつかったら、ここで解く。取り込み先では解かない（取り込み先は pull だけをする）。
-
-### ここで直す
-
-1. このリポジトリで直す。検査を変えたら test.sh に止まる場合と通る場合を足す。新しい設定の名前は `common.conf` に既定つきで足す（フレームワーク別の値は `profiles/<名>/profile.conf`）
-2. `sh test.sh` → `HOOKS-TEST PASS`
-3. コミットして push（このリポジトリにもフックが入っている。`sh install.sh plain`）
-4. 使っている repo に「pull して」と伝える（下）
-
-### 更新を受け取る（subtree pull）
-
-```sh
-git subtree pull --prefix=Tools/commit-hooks https://github.com/kaedeasset/commit-hooks.git main --squash
-sh Tools/commit-hooks/test.sh      # 自分の OS で回す。FAIL なら「ほかの OS で落ちたら」
-```
-
-- 中継は本体のパスを指すだけなので、`install.sh` を回し直す必要はない（回しても `unchanged`）
-- `commit-hooks.conf` は取り込んだフォルダの外なので変わらない
-- subtree の作るコミットは `Merge …` なので検査に止められない
-- 作業ツリーが汚れていると pull できない。先にコミットする
-- いつ pull するか: 返したブランチが main に入った後と、ここから「pull して」と言われたとき。毎日でなくてよい
-
-### やらないこと
-
-- 取り込み先で直して返さずに置く（次の pull でぶつかる・ほかの repo に届かない）
-- 取り込み先から main へ直接 push する
-- `--no-verify` で止まったコミットを通す（止まったら検査か中身のどちらが違うかを見る。検査が違うならここを直して返す）
-- 自分の repo の事情のために `common.conf` の既定を変える
-
-## 戻し方
-
-`$(git rev-parse --git-common-dir)/hooks/commit-msg` と `pre-commit` を消せば止まる。取り込んだフォルダは `git rm -r Tools/commit-hooks`、設定は `git rm commit-hooks.conf` で消す。
-
-## 注意（踏んだもの）
-
-- 文字数はロケールに頼らず、UTF-8 の続きのバイトを除いて数える（`LC_ALL=C` の awk で日本語 40 字が 120 字になった）。試験の「40 字は通る・41 字は止まる」で確かめている。
-- Mac の sed は置き換えの `\t`・`\r` を文字にしない。タブや CR が要るところは awk か `printf` で作る（試験の CRLF の場合がこれで Mac だけ落ちるところだった）。
-- `awk -v` で正規表現を渡すと `\.` などのエスケープが先に消え、`^id_rsa\.pub$` が `id_rsaXpub` にも当たっていた。環境変数で渡して `ENVIRON` で読む。
-- Claude Code の Bash ツールのコマンド文字列にバックスラッシュを直接書くと潰れることがある。スクリプトはファイルに書いてから実行する。
-
-## ライセンス
-
-MIT（[LICENSE](LICENSE)）。
+| [`rules.md`](rules.md) | メッセージの形と検査の一覧（M1〜M5・P1〜P7）の正 |
+| `hooks/` | 検査の本体（`commit-msg`・`pre-commit`）・値の読み込み・中継のひな形 |
+| `profiles/` | 共通の既定（`common.conf`）と、フレームワーク別の値と `stage.md` |
+| `os/` | Windows・Mac の注意 |
+| `install.sh` | `.git/hooks/` に中継を書き、`commit-hooks.conf` が無ければ作る（2 回目は何も変えない） |
+| `test.sh` | 使い捨ての repo で 63 の場合を回す |
+| [`skill/SKILL.md`](skill/SKILL.md) | Claude Code のコミットスキルのひな形 |
+| [`docs/install.md`](docs/install.md) | 導入ガイド（分かれ道・hooksPath・改行・戻し方） |
+| [`docs/operations.md`](docs/operations.md) | 運用マニュアル（どこを直すか・フレームワークと OS の違い・送り返し方・受け取り方・踏んだもの） |
+
+## 作者・ライセンス
+
+人が決まりと合格の条件を決め、結果を確かめて push します。フック・試験・文書は Claude Code が書きました（このリポジトリのコミットも、この決まりの形で書いてあります。例は `git log` で）。[MIT](LICENSE)。
+
+---
+
+> この文書は Claude Opus 5.5 が生成しました。内容の正確性は人間のレビューを経て確認してください。
